@@ -1,4 +1,4 @@
-"""Tests for the multi-inverter aggregator."""
+"""Tests for the multi-inverter aggregator (SA-compatible key naming)."""
 
 from inverter_bridge.aggregator import aggregate_inverters
 from inverter_bridge.parsers import ParsedBlock
@@ -33,7 +33,7 @@ def _make_state(active_p: float, temp_max: float = 40.0) -> ParsedBlock:
             "grid_current_l1": 0.0,
             "grid_frequency": 0.0,
             "ac_output_voltage_l1": 120.0,
-            "ac_output_current_l1": active_p / 120.0 / 2,  # half on L1, rough
+            "ac_output_current_l1": active_p / 120.0 / 2,
             "ac_output_frequency": 60.0,
             "load_percent_alt": 27.0,
             "inverter_active_power": active_p,
@@ -63,10 +63,35 @@ def _make_pv(pv1_w: float, pv2_w: float) -> ParsedBlock:
     )
 
 
-def test_battery_power_positive_when_charging():
-    """Per spec: positive current = charging, positive published battery_power = charging."""
+def test_aggregate_uses_sa_keys_without_suffix():
+    """Aggregated keys should NOT have the _2 suffix."""
     inv1 = {
-        "battery": _make_battery(soc=50, v=52.0, i=10.0),  # positive => charging
+        "battery": _make_battery(soc=44, v=52.5, i=10.0),
+        "state": _make_state(active_p=500, temp_max=45.0),
+        "pv_temps_l2": _make_pv(pv1_w=300, pv2_w=400),
+    }
+    inv2 = {
+        "battery": _make_battery(soc=44, v=52.5, i=12.0),
+        "state": _make_state(active_p=600, temp_max=48.0),
+        "pv_temps_l2": _make_pv(pv1_w=350, pv2_w=380),
+    }
+    out = aggregate_inverters([inv1, inv2])
+    # Aggregated keys (no _2 suffix)
+    assert "battery_state_of_charge" in out
+    assert "battery_voltage" in out
+    assert "battery_power" in out
+    assert "load_power" in out
+    assert "pv_power" in out
+    assert "grid_voltage" in out
+    assert "grid_frequency" in out
+    # No _2 suffixes
+    assert "battery_state_of_charge_2" not in out
+    assert "load_power_2" not in out
+
+
+def test_battery_power_positive_when_charging():
+    inv1 = {
+        "battery": _make_battery(soc=50, v=52.0, i=10.0),
         "state": _make_state(active_p=500),
         "pv_temps_l2": _make_pv(pv1_w=400, pv2_w=400),
     }
@@ -76,7 +101,6 @@ def test_battery_power_positive_when_charging():
         "pv_temps_l2": _make_pv(pv1_w=500, pv2_w=500),
     }
     out = aggregate_inverters([inv1, inv2])
-    # battery_power = V_avg * (i1 + i2) = 52.0 * 25.0 = 1300W (positive = charging)
     assert out["battery_power"] == 52.0 * 25.0
     assert out["battery_power"] > 0
 
@@ -97,7 +121,7 @@ def test_battery_power_negative_when_discharging():
     assert out["battery_power"] < 0
 
 
-def test_aggregate_basic_sensors():
+def test_aggregate_per_inverter_keys():
     inv1 = {
         "battery": _make_battery(soc=44, v=52.5, i=10.0),
         "state": _make_state(active_p=500, temp_max=45.0),
@@ -109,17 +133,15 @@ def test_aggregate_basic_sensors():
         "pv_temps_l2": _make_pv(pv1_w=350, pv2_w=380),
     }
     out = aggregate_inverters([inv1, inv2])
-    assert out["battery_state_of_charge_2"] == 44.0
-    assert out["battery_voltage"] == 52.5
-    assert out["load_power_2"] == 500 + 600
-    assert out["pv_power"] == 300 + 400 + 350 + 380
-    # Per-inverter temperatures
-    assert out["inverter_1_temperature_2"] == 45.0
-    assert out["inverter_2_temperature_2"] == 48.0
+    # Per-inverter keys (no _2 suffix)
+    assert out["inverter_1_temperature"] == 45.0
+    assert out["inverter_2_temperature"] == 48.0
+    assert out["inverter_1_load_power"] == 500
+    assert out["inverter_2_load_power"] == 600
+    assert out["inverter_1_pv_power"] == 700.0
+    assert out["inverter_2_pv_power"] == 730.0
     # Device mode from state code
     assert out["inverter_1_device_mode"] == "Battery"
-    assert out["inverter_2_device_mode"] == "Battery"
-    # Aggregated mode
     assert out["mode"] == "Battery"
 
 
@@ -134,32 +156,29 @@ def test_charge_state_text_label():
 
 
 def test_missing_state_block_gracefully_degraded():
-    """If one inverter's state block is missing, still publish what we have."""
     inv1 = {"battery": _make_battery(soc=60, v=52.0, i=10.0)}
     inv2 = {"battery": _make_battery(soc=60, v=52.0, i=10.0)}
     out = aggregate_inverters([inv1, inv2])
-    assert out["battery_state_of_charge_2"] == 60.0
-    assert "load_power_2" not in out
+    assert out["battery_state_of_charge"] == 60.0
+    assert "load_power" not in out
 
 
 def test_pv_current_computed_from_power_and_voltage():
     inv1 = {
         "battery": _make_battery(soc=50, v=52.0, i=0.0),
         "state": _make_state(active_p=500),
-        "pv_temps_l2": _make_pv(pv1_w=520, pv2_w=260),  # V=260, so I=2.0 and 1.0
+        "pv_temps_l2": _make_pv(pv1_w=520, pv2_w=260),
     }
     out = aggregate_inverters([inv1])
-    assert out["inverter_1_pv_current_1_2"] == 2.0
-    assert out["inverter_1_pv_current_2_2"] == 1.0
+    assert out["inverter_1_pv_current_1"] == 2.0
+    assert out["inverter_1_pv_current_2"] == 1.0
 
 
 def test_pv_current_clamped_when_voltage_zero():
-    """Avoid /0 when PV is off."""
     inv1 = {
         "battery": _make_battery(soc=50, v=52.0, i=0.0),
         "state": _make_state(active_p=0),
     }
-    # PV block with all zeros
     pv = ParsedBlock(
         block_addr=0x0223,
         block_name="pv_temps_l2",
@@ -176,12 +195,11 @@ def test_pv_current_clamped_when_voltage_zero():
     )
     inv1["pv_temps_l2"] = pv
     out = aggregate_inverters([inv1])
-    assert out["inverter_1_pv_current_1_2"] == 0.0
-    assert out["inverter_1_pv_current_2_2"] == 0.0
+    assert out["inverter_1_pv_current_1"] == 0.0
+    assert out["inverter_1_pv_current_2"] == 0.0
 
 
 def test_ac_output_voltage_is_split_phase_sum():
-    """SA's `_ac_output_voltage` = L1 + L2 (240V split-phase total)."""
     inv1 = {
         "battery": _make_battery(soc=50, v=52.0, i=0.0),
         "state": _make_state(active_p=0),

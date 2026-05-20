@@ -67,9 +67,9 @@ def test_hot_cycle_publishes_aggregated_values(cfg):
     pv_calls = fake_pub.publish_values.call_args_list
     assert pv_calls, "expected at least one publish_values call (aggregator output)"
     aggregated = pv_calls[0].args[0]
-    assert "battery_state_of_charge_2" in aggregated
+    assert "battery_state_of_charge" in aggregated
     assert "battery_power" in aggregated
-    assert "load_power_2" in aggregated
+    assert "load_power" in aggregated
     assert "pv_power" in aggregated
     fake_pub.set_online.assert_called()
     # Meta sensors:
@@ -129,7 +129,7 @@ def test_mixed_success_one_inverter_offline(cfg):
     assert pv_calls
     last_agg = pv_calls[-1].args[0]
     # Should have inv1 data
-    assert "battery_state_of_charge_2" in last_agg
+    assert "battery_state_of_charge" in last_agg
     # And offline for inv2
     offline = [
         c for c in fake_pub.publish_value.call_args_list
