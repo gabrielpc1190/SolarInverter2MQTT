@@ -1,0 +1,26 @@
+[Unit]
+Description=Inverter Bridge - SRNE Modbus -> MQTT for home
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=inverter-bridge
+Group=dialout
+ExecStart=/opt/inverter-bridge/.venv/bin/python -m inverter_bridge --config /etc/inverter-bridge.yaml
+Restart=always
+RestartSec=5s
+WatchdogSec=30s
+
+# Security hardening (compatible with /dev/ttyUSB* + /etc + /var/log access)
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log/inverter-bridge
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+
+[Install]
+WantedBy=multi-user.target
