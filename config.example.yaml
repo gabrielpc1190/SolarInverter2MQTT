@@ -1,0 +1,37 @@
+# inverter-bridge config example
+# Copy to /etc/inverter-bridge.yaml on the OPi and edit to taste.
+#
+# To find the correct by-path symlinks, on the OPi run:
+#   ls -la /dev/serial/by-path/
+# Map each inverter to its physical USB port.
+
+inverters:
+  - name: inv1
+    port: /dev/serial/by-path/platform-5311400.usb-usb-0:1:1.0-port0
+    slave: 0x01
+  - name: inv2
+    port: /dev/serial/by-path/platform-xhci-hcd.1.auto-usb-0:1:1.0-port0
+    slave: 0x02
+
+polling:
+  hot_interval_s: 3.0
+  cold_interval_s: 60.0
+  serial_timeout_s: 1.5
+  inter_query_delay_s: 0.05
+  retry_attempts: 3       # inv1 has higher fail rate; retry-on-no-clean-reply
+  retry_backoff_s: 0.1
+
+mqtt:
+  host: 192.0.2.10
+  port: 1883
+  username: inverter_bridge
+  password_file: /etc/inverter-bridge.secrets
+  client_id: inverter_bridge
+  topic_prefix: gadi_inverters
+  discovery_prefix: homeassistant
+  retain_discovery: true
+  qos: 0
+
+logging:
+  level: INFO
+  format: text   # or "json"
