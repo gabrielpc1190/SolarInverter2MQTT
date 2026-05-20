@@ -59,7 +59,8 @@ def test_parse_state_block_slave01():
     )
     parsed = parse_block(block_addr=0x0210, frame=frame)
     assert parsed.fields["inverter_state_code"] == 3.0
-    assert parsed.fields["bus_voltage"] == pytest.approx(52.20, abs=0.01)
+    # 0x0212 is the HV DC bus (post-boost), not battery V. Scale 0.1: raw 5220 → 522.0 V.
+    assert parsed.fields["bus_voltage"] == pytest.approx(522.0, abs=0.1)
     assert parsed.fields["ac_output_voltage_l1"] == 120.1
     assert parsed.fields["ac_output_frequency"] == 60.0
     assert parsed.fields["inverter_active_power"] == 258.0

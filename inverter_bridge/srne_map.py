@@ -72,7 +72,11 @@ FIELDS: list[Field] = [
     # state block 0x0210..0x0222
     Field(0x0210, 0,  "inverter_state_code",     1.0,  False, "",   None,       None),
     Field(0x0210, 1,  "inverter_substate_code",  1.0,  False, "",   None,       None),
-    Field(0x0210, 2,  "bus_voltage",             0.01, False, "V",  "voltage",  "measurement"),
+    # 0x0212 raw=5220 → 522.0 V is the HV DC bus (post-boost converter, NOT battery V).
+    # SA historical range 495-570V (mean 518V) confirms scale 0.1 is correct.
+    # The earlier interpretation "bus = battery V" was a coincidence: raw × 0.01 happens
+    # to equal battery V only because boost ratio ≈ 10. Fixed 2026-05-20 (F-8).
+    Field(0x0210, 2,  "bus_voltage",             0.1,  False, "V",  "voltage",  "measurement"),
     Field(0x0210, 3,  "grid_voltage_l1",         0.1,  False, "V",  "voltage",  "measurement"),
     Field(0x0210, 4,  "grid_current_l1",         0.1,  False, "A",  "current",  "measurement"),
     Field(0x0210, 5,  "grid_frequency",          0.01, False, "Hz", "frequency","measurement"),
