@@ -47,6 +47,8 @@ def _make_state(active_p: float, temp_max: float = 40.0) -> ParsedBlock:
 
 
 def _make_pv(pv1_w: float, pv2_w: float) -> ParsedBlock:
+    """Build a PV block fixture; convert input watts to the underlying current
+    (registers store I, aggregator computes P = V × I with V = 260)."""
     return ParsedBlock(
         block_addr=0x0223,
         block_name="pv_temps_l2",
@@ -57,8 +59,8 @@ def _make_pv(pv1_w: float, pv2_w: float) -> ParsedBlock:
             "pv2_voltage": 260.0,
             "ac_output_voltage_l2": 120.0,
             "ac_output_current_l2": (pv1_w + pv2_w) / 120.0 / 2,
-            "pv1_power": pv1_w,
-            "pv2_power": pv2_w,
+            "pv1_current": pv1_w / 260.0,
+            "pv2_current": pv2_w / 260.0,
         },
     )
 
@@ -163,15 +165,22 @@ def test_missing_state_block_gracefully_degraded():
     assert "load_power" not in out
 
 
-def test_pv_current_computed_from_power_and_voltage():
+def test_pv_power_computed_from_voltage_and_current():
+    """PV power = V × I (registers store current; we compute power)."""
     inv1 = {
         "battery": _make_battery(soc=50, v=52.0, i=0.0),
         "state": _make_state(active_p=500),
         "pv_temps_l2": _make_pv(pv1_w=520, pv2_w=260),
     }
     out = aggregate_inverters([inv1])
+    # _make_pv stored pv1_current = 520/260 = 2.0 A, pv2_current = 260/260 = 1.0 A
     assert out["inverter_1_pv_current_1"] == 2.0
     assert out["inverter_1_pv_current_2"] == 1.0
+    # Aggregator computes power from V × I: 260 × 2 = 520W, 260 × 1 = 260W
+    assert out["inverter_1_pv_power_1"] == 520.0
+    assert out["inverter_1_pv_power_2"] == 260.0
+    assert out["inverter_1_pv_power"] == 780.0
+    assert out["pv_power"] == 780.0
 
 
 def test_pv_current_clamped_when_voltage_zero():
@@ -189,8 +198,8 @@ def test_pv_current_clamped_when_voltage_zero():
             "pv2_voltage": 0.0,
             "ac_output_voltage_l2": 120.0,
             "ac_output_current_l2": 0.0,
-            "pv1_power": 0.0,
-            "pv2_power": 0.0,
+            "pv1_current": 0.0,
+            "pv2_current": 0.0,
         },
     )
     inv1["pv_temps_l2"] = pv

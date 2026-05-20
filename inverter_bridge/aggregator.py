@@ -105,6 +105,8 @@ def aggregate_inverters(
         out["bus_voltage"] = inv1_state.fields["bus_voltage"]
 
     # PV + L2 (split-phase) + per-phase L2 apparent
+    # Note: PV1/PV2 are stored as CURRENTS (A) in the inverter registers; we compute
+    # power as V × I. Confirmed empirically 2026-05-20 (energy balance).
     pv_total = 0.0
     pv_any = False
     for i, inv in enumerate(per_inverter, start=1):
@@ -112,10 +114,12 @@ def aggregate_inverters(
         if pv is None:
             continue
         pv_any = True
-        p1 = pv.fields["pv1_power"]
-        p2 = pv.fields["pv2_power"]
         pv1_v = pv.fields["pv1_voltage"]
         pv2_v = pv.fields["pv2_voltage"]
+        pv1_i = pv.fields["pv1_current"]
+        pv2_i = pv.fields["pv2_current"]
+        p1 = round(pv1_v * pv1_i, 1)  # PV1 power = V × I
+        p2 = round(pv2_v * pv2_i, 1)
         v_l2 = pv.fields["ac_output_voltage_l2"]
         i_l2 = pv.fields["ac_output_current_l2"]
         pv_total += p1 + p2
@@ -123,11 +127,12 @@ def aggregate_inverters(
         out[f"inverter_{i}_pv2_voltage"] = pv2_v
         out[f"inverter_{i}_pv_voltage_1"] = pv1_v
         out[f"inverter_{i}_pv_voltage_2"] = pv2_v
+        out[f"inverter_{i}_pv_current_1"] = pv1_i
+        out[f"inverter_{i}_pv_current_2"] = pv2_i
+        out[f"inverter_{i}_pv_current"] = round(pv1_i + pv2_i, 2)
         out[f"inverter_{i}_pv_power_1"] = p1
         out[f"inverter_{i}_pv_power_2"] = p2
         out[f"inverter_{i}_pv_power"] = round(p1 + p2, 1)
-        out[f"inverter_{i}_pv_current_1"] = round(p1 / pv1_v, 2) if pv1_v > 5 else 0.0
-        out[f"inverter_{i}_pv_current_2"] = round(p2 / pv2_v, 2) if pv2_v > 5 else 0.0
         out[f"inverter_{i}_load_power_2"] = round(v_l2 * i_l2, 1)
         # Combined L1+L2 AC output voltage (SA shows ~240 V)
         s = inv.get("state")

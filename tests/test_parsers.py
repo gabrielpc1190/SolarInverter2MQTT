@@ -80,8 +80,10 @@ def test_parse_pv_block_slave01():
     assert parsed.fields["pv2_voltage"] == pytest.approx(260.8, abs=0.05)
     assert parsed.fields["ac_output_voltage_l2"] == pytest.approx(120.1, abs=0.05)
     assert parsed.fields["ac_output_current_l2"] == pytest.approx(2.1, abs=0.05)
-    assert parsed.fields["pv1_power"] == 46.0
-    assert parsed.fields["pv2_power"] == 121.0
+    # 0x0232 and 0x0234 are PV CURRENT in 0.01A units (verified empirically 2026-05-20).
+    # The original fixture had raw=46 and raw=121 → 0.46 A and 1.21 A.
+    assert parsed.fields["pv1_current"] == pytest.approx(0.46, abs=0.001)
+    assert parsed.fields["pv2_current"] == pytest.approx(1.21, abs=0.001)
 
 
 def test_parse_signed_battery_current_negative():

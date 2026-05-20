@@ -92,8 +92,11 @@ FIELDS: list[Field] = [
     Field(0x0223, 6,  "pv2_voltage",             0.1,  False, "V",  "voltage",  "measurement"),   # 0x0229
     Field(0x0223, 9,  "ac_output_voltage_l2",    0.1,  False, "V",  "voltage",  "measurement"),   # 0x022C
     Field(0x0223, 11, "ac_output_current_l2",    0.1,  False, "A",  "current",  "measurement"),   # 0x022E
-    Field(0x0223, 15, "pv1_power",               1.0,  False, "W",  "power",    "measurement"),   # 0x0232
-    Field(0x0223, 17, "pv2_power",               1.0,  False, "W",  "power",    "measurement"),   # 0x0234
+    # 0x0232 / 0x0234 are PV CURRENT in 0.01 A units (verified empirically 2026-05-20 via
+    # energy balance: PV(V*I) - load - battery_charge balances to within ~3% only when scale=0.01).
+    # PV power is COMPUTED as V x I in the aggregator, not read directly.
+    Field(0x0223, 15, "pv1_current",             0.01, False, "A",  "current",  "measurement"),   # 0x0232
+    Field(0x0223, 17, "pv2_current",             0.01, False, "A",  "current",  "measurement"),   # 0x0234
 ]
 
 
