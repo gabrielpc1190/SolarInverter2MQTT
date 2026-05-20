@@ -14,6 +14,20 @@ on the home broker before SA was disconnected):
   unique_id `inverter_<N>_<key>` (e.g. `inverter_1_pv_voltage`).
 - Discovery topic: `homeassistant/sensor/<unique_id>/config` (retained).
 - Device identifiers: `["sa_inverter"]`, model "SRNE Split-phase".
+
+Extensions beyond SA (audit findings F-2, F-4, F-6):
+
+- `_meta/*` diagnostic sensors: topic `solar_assistant/_meta/<key>/state`,
+  unique_id `meta_<key>` (slash collapsed) — top-level, not under `total/`.
+- `binary_sensor.inverter_bridge_online`: derives state from the
+  `availability_topic` (LWT) for the spec §12.3 watchdog automation.
+- `force_update: true` on low-granularity sensors (SoC, mode, etc.) so HA
+  recorder bumps `last_updated` on every received message even when the
+  value did not change (fixes F-6 stale SoC).
+- Energy accumulator discovery (`battery_energy_in/out`, `pv_energy`,
+  `load_energy`, `grid_energy_in/out`) — values are published by the
+  energy_integrator module; this publisher only emits discovery so HA
+  knows the entities exist.
 """
 
 from __future__ import annotations
@@ -75,6 +89,40 @@ PER_INVERTER_SENSORS: dict[str, tuple[str, str | None, str | None]] = {
     "charge_state":             ("",    None,            None),
 }
 
+# Energy accumulators (F-2 discovery). Values are produced by the
+# energy_integrator module; the publisher only emits discovery. They are
+# aggregated (no `inverter_N_` prefix), so they share the `total_<key>`
+# unique_id / `total/<key>` topic convention.
+ENERGY_SENSORS: dict[str, tuple[str, str | None, str | None]] = {
+    "battery_energy_in":   ("kWh", "energy", "total_increasing"),
+    "battery_energy_out":  ("kWh", "energy", "total_increasing"),
+    "pv_energy":           ("kWh", "energy", "total_increasing"),
+    "load_energy":         ("kWh", "energy", "total_increasing"),
+    "grid_energy_in":      ("kWh", "energy", "total_increasing"),
+    "grid_energy_out":     ("kWh", "energy", "total_increasing"),
+}
+
+# Diagnostic sensors (F-4). Published top-level under `solar_assistant/_meta/`,
+# not under `total/`. unique_id is `meta_<key>` (slash replaced).
+META_SENSORS: dict[str, tuple[str, str | None, str | None]] = {
+    "_meta/poll_duration_ms":  ("ms", None,       "measurement"),
+    "_meta/crc_fails_total":   ("",   None,       "total_increasing"),
+    "_meta/uptime_s":          ("s",  "duration", "total_increasing"),
+}
+
+# Low-granularity sensors that should carry `force_update: true` in their
+# discovery payload so HA recorder bumps `last_updated` on every received
+# message (F-6 fix: SoC was 17 min stale because the value rarely changes).
+# Matched by suffix (so `inverter_1_load_percentage` also matches).
+FORCE_UPDATE_KEY_SUFFIXES: tuple[str, ...] = (
+    "battery_state_of_charge",
+    "mode",
+    "device_mode",
+    "charge_state",
+    "load_percentage",
+    "inverter_state_code",
+)
+
 
 def _device_block() -> dict[str, Any]:
     """SA-compatible device block — keeps existing HA device intact."""
@@ -91,11 +139,15 @@ def _key_to_topic_path(key: str) -> str:
 
     Aggregated keys (no `inverter_N_` prefix) -> `total/<key>`.
     Per-inverter keys `inverter_N_<rest>` -> `inverter_N/<rest>`.
+    `_meta/*` diagnostic keys stay top-level (no `total/` prefix).
 
     Examples:
         battery_state_of_charge -> total/battery_state_of_charge
         inverter_1_pv_power     -> inverter_1/pv_power
+        _meta/uptime_s          -> _meta/uptime_s
     """
+    if key.startswith("_meta/"):
+        return key
     if key.startswith("inverter_") and "_" in key[len("inverter_"):]:
         # inverter_1_xxx_yyy -> inverter_1/xxx_yyy
         n, rest = key[len("inverter_"):].split("_", 1)
@@ -107,10 +159,29 @@ def _key_to_unique_id(key: str) -> str:
     """Map an aggregator key to SA's unique_id format.
 
     Aggregated -> `total_<key>`. Per-inverter -> `inverter_N_<rest>` (unchanged).
+    `_meta/<x>` -> `meta_<x>` (slash collapsed; unique_ids can't contain `/`).
     """
+    if key.startswith("_meta/"):
+        return "meta_" + key[len("_meta/"):]
     if key.startswith("inverter_"):
         return key  # already in `inverter_N_<rest>` form
     return f"total_{key}"
+
+
+def _needs_force_update(key: str) -> bool:
+    """Return True if this key's discovery should set `force_update: true`.
+
+    Used for low-granularity sensors whose value changes rarely (SoC %, mode
+    text, charge state, etc.) so HA recorder updates `last_updated` even when
+    the new message has the same value as the previous one. See F-6.
+    """
+    if key.startswith("_meta/"):
+        return True
+    for suffix in FORCE_UPDATE_KEY_SUFFIXES:
+        # Exact match for aggregate keys, or `inverter_N_<suffix>` for per-inverter.
+        if key == suffix or key.endswith(f"_{suffix}"):
+            return True
+    return False
 
 
 class MqttPublisher:
@@ -176,6 +247,11 @@ class MqttPublisher:
         Overwrites SA's retained discoveries on the same topic, so HA's existing
         entities (registered against SA's unique_ids) keep their entity_id and
         resume receiving state updates from us.
+
+        Also publishes:
+        - 6 energy-accumulator sensors (F-2) under aggregate convention.
+        - 3 `_meta/*` diagnostic sensors (F-4) top-level.
+        - 1 binary_sensor.inverter_bridge_online (F-4) derived from LWT.
         """
         # 1) Aggregated sensors
         for key, (unit, dc, sc) in AGGREGATE_SENSORS.items():
@@ -186,7 +262,16 @@ class MqttPublisher:
                 state_class=sc,
                 display_name=key.replace("_", " ").capitalize(),
             )
-        # 2) Per-inverter sensors x N
+        # 2) Energy accumulators (F-2)
+        for key, (unit, dc, sc) in ENERGY_SENSORS.items():
+            self._publish_discovery_one(
+                key=key,
+                unit=unit,
+                device_class=dc,
+                state_class=sc,
+                display_name=key.replace("_", " ").capitalize(),
+            )
+        # 3) Per-inverter sensors x N
         for i in range(1, self.n_inverters + 1):
             for sub_key, (unit, dc, sc) in PER_INVERTER_SENSORS.items():
                 full_key = f"inverter_{i}_{sub_key}"
@@ -197,6 +282,46 @@ class MqttPublisher:
                     state_class=sc,
                     display_name=f"Inverter {i} - {sub_key.replace('_', ' ').capitalize()}",
                 )
+        # 4) Meta diagnostic sensors (F-4)
+        for key, (unit, dc, sc) in META_SENSORS.items():
+            # Strip `_meta/` for the display name.
+            short = key[len("_meta/"):]
+            self._publish_discovery_one(
+                key=key,
+                unit=unit,
+                device_class=dc,
+                state_class=sc,
+                display_name=f"Meta {short.replace('_', ' ')}",
+            )
+        # 5) Binary sensor for daemon online status (F-4, spec §12.3)
+        self.publish_binary_sensor_discovery()
+
+    def publish_binary_sensor_discovery(self) -> None:
+        """Publish a binary_sensor whose state mirrors the LWT availability topic.
+
+        Allows HA automations to react to the daemon disappearing (spec §12.3
+        watchdog) without needing a template sensor. Unique_id is stable so the
+        same entity is reused across daemon restarts.
+        """
+        unique = "inverter_bridge_online"
+        config_topic = f"{self.cfg.discovery_prefix}/binary_sensor/{unique}/config"
+        payload: dict[str, Any] = {
+            "name": "Inverter bridge online",
+            "unique_id": unique,
+            "object_id": unique,
+            "state_topic": self._availability_topic,
+            "payload_on": "online",
+            "payload_off": "offline",
+            "device_class": "connectivity",
+            "availability_topic": self._availability_topic,
+            "device": self._device,
+        }
+        self._client.publish(
+            config_topic,
+            payload=json.dumps(payload),
+            qos=self.cfg.qos,
+            retain=self.cfg.retain_discovery,
+        )
 
     def _publish_discovery_one(
         self,
@@ -206,6 +331,7 @@ class MqttPublisher:
         device_class: str | None,
         state_class: str | None,
         display_name: str,
+        force_update: bool | None = None,
     ) -> None:
         unique = _key_to_unique_id(key)
         config_topic = f"{self.cfg.discovery_prefix}/sensor/{unique}/config"
@@ -224,6 +350,11 @@ class MqttPublisher:
             payload["device_class"] = device_class
         if state_class:
             payload["state_class"] = state_class
+        # `force_update` decision: caller override > auto by key.
+        if force_update is None:
+            force_update = _needs_force_update(key)
+        if force_update:
+            payload["force_update"] = True
         self._client.publish(
             config_topic,
             payload=json.dumps(payload),
