@@ -10,9 +10,11 @@ from __future__ import annotations
 import logging
 import time
 from collections import defaultdict
+from pathlib import Path
 
 from .aggregator import aggregate_inverters
 from .config import BridgeConfig, InverterCfg
+from .energy_integrator import EnergyIntegrator
 from .modbus import ModbusException
 from .mqtt_publisher import MqttPublisher
 from .parsers import ParsedBlock, parse_block
@@ -20,6 +22,8 @@ from .serial_io import SerialPort
 from .srne_map import BLOCKS, BlockTier
 
 log = logging.getLogger(__name__)
+
+_DEFAULT_ENERGY_PERSIST_PATH = Path("/var/lib/inverter-bridge/energy.json")
 
 
 class Daemon:
@@ -29,12 +33,20 @@ class Daemon:
         *,
         serial_factory=SerialPort,
         publisher_factory=MqttPublisher,
+        integrator: EnergyIntegrator | None = None,
+        energy_persist_path: Path | None = _DEFAULT_ENERGY_PERSIST_PATH,
     ) -> None:
         """Construct daemon.
 
         Args:
             cfg: validated BridgeConfig
             serial_factory / publisher_factory: injectable for testing.
+            integrator: optional pre-built EnergyIntegrator (e.g. a mock).
+                If None, a real EnergyIntegrator is constructed with
+                `persist_path=energy_persist_path`.
+            energy_persist_path: file path used by the default EnergyIntegrator
+                to persist accumulated energy across restarts. Pass None to
+                disable persistence (useful in tests).
         """
         self.cfg = cfg
         self.ports: dict[str, SerialPort] = {
@@ -42,9 +54,16 @@ class Daemon:
             for i in cfg.inverters
         }
         self.publisher = publisher_factory(cfg.mqtt, n_inverters=len(cfg.inverters))
+        self.integrator: EnergyIntegrator = (
+            integrator
+            if integrator is not None
+            else EnergyIntegrator(persist_path=energy_persist_path)
+        )
         self._fail_count: dict[str, int] = defaultdict(int)
         self._meta_start = time.monotonic()
         self._crc_fails_total = 0
+        # Set on first hot cycle; until then `elapsed_s` is treated as 0.
+        self._last_hot_cycle_monotonic: float | None = None
 
     # ----- lifecycle -----
 
@@ -56,6 +75,12 @@ class Daemon:
         try:
             self._loop_forever()
         finally:
+            # Persist energy state on clean shutdown so the next start picks up
+            # the accumulator where we left off, then close the MQTT session.
+            try:
+                self.save_energy_state()
+            except Exception:
+                log.exception("failed to persist energy state on shutdown")
             self.publisher.disconnect()
 
     def _loop_forever(self) -> None:
@@ -87,6 +112,18 @@ class Daemon:
             blocks = self._poll_inverter(inv, tier=BlockTier.HOT)
             per_inverter.append(blocks)
         aggregated = aggregate_inverters(per_inverter)
+        # Integrate energy (kWh) from instantaneous power readings. First cycle
+        # has no elapsed delta yet, so dt = 0 (no accumulation that cycle).
+        now = time.monotonic()
+        if self._last_hot_cycle_monotonic is None:
+            elapsed_s = 0.0
+        else:
+            elapsed_s = max(0.0, now - self._last_hot_cycle_monotonic)
+        energy_values = self.integrator.update(
+            aggregated=aggregated, elapsed_s=elapsed_s
+        )
+        aggregated.update(energy_values)
+        self._last_hot_cycle_monotonic = now
         self.publisher.publish_values(aggregated)
         if any(blocks for blocks in per_inverter):
             self.publisher.set_online()
@@ -102,6 +139,16 @@ class Daemon:
         """Poll all cold-tier blocks on both inverters. Doesn't publish (only refreshes internals)."""
         for inv in self.cfg.inverters:
             self._poll_inverter(inv, tier=BlockTier.COLD)
+        # Persist accumulated energy on every cold cycle so a restart near a
+        # cycle boundary doesn't lose minutes of integration.
+        self.save_energy_state()
+
+    def save_energy_state(self) -> None:
+        """Persist the energy integrator to disk. Safe to call repeatedly."""
+        try:
+            self.integrator.save()
+        except Exception:
+            log.exception("failed to persist energy state")
 
     # ----- internals -----
 

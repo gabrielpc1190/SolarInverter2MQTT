@@ -6,7 +6,23 @@ import pytest
 
 from inverter_bridge.config import BridgeConfig, InverterCfg, MqttCfg, PollingCfg
 from inverter_bridge.daemon import Daemon
+from inverter_bridge.energy_integrator import EnergyIntegrator
 from inverter_bridge.modbus import ModbusException, ModbusFrame
+
+
+def _make_fake_integrator() -> MagicMock:
+    """A MagicMock EnergyIntegrator whose `update()` returns the canonical
+    set of energy keys with zero values, so the daemon can blindly merge."""
+    fake = MagicMock(spec=EnergyIntegrator)
+    fake.update.return_value = {
+        "battery_energy_in": 0.0,
+        "battery_energy_out": 0.0,
+        "pv_energy": 0.0,
+        "load_energy": 0.0,
+        "grid_energy_in": 0.0,
+        "grid_energy_out": 0.0,
+    }
+    return fake
 
 
 @pytest.fixture
@@ -59,7 +75,12 @@ def test_hot_cycle_publishes_aggregated_values(cfg):
     )
     fake_pub = MagicMock()
     publisher_factory = MagicMock(return_value=fake_pub)
-    d = Daemon(cfg, serial_factory=serial_factory, publisher_factory=publisher_factory)
+    d = Daemon(
+        cfg,
+        serial_factory=serial_factory,
+        publisher_factory=publisher_factory,
+        integrator=_make_fake_integrator(),
+    )
     d.run_one_hot_cycle()
     # Verify publisher.publish_value was called for key sensors
     keys_published = [c.args[0] for c in fake_pub.publish_value.call_args_list]
@@ -86,7 +107,12 @@ def test_exception_response_does_not_kill_daemon(cfg):
     serial_factory = _make_serial_factory(query)
     fake_pub = MagicMock()
     publisher_factory = MagicMock(return_value=fake_pub)
-    d = Daemon(cfg, serial_factory=serial_factory, publisher_factory=publisher_factory)
+    d = Daemon(
+        cfg,
+        serial_factory=serial_factory,
+        publisher_factory=publisher_factory,
+        integrator=_make_fake_integrator(),
+    )
     # Should NOT raise
     d.run_one_hot_cycle()
 
@@ -98,7 +124,12 @@ def test_timeout_marks_inverter_offline_after_3_consecutive(cfg):
     serial_factory = _make_serial_factory(query)
     fake_pub = MagicMock()
     publisher_factory = MagicMock(return_value=fake_pub)
-    d = Daemon(cfg, serial_factory=serial_factory, publisher_factory=publisher_factory)
+    d = Daemon(
+        cfg,
+        serial_factory=serial_factory,
+        publisher_factory=publisher_factory,
+        integrator=_make_fake_integrator(),
+    )
     for _ in range(3):
         d.run_one_hot_cycle()
     # After 3 fully failed cycles per inverter, the daemon publishes an offline marker
@@ -121,7 +152,12 @@ def test_mixed_success_one_inverter_offline(cfg):
     serial_factory = _make_serial_factory(query)
     fake_pub = MagicMock()
     publisher_factory = MagicMock(return_value=fake_pub)
-    d = Daemon(cfg, serial_factory=serial_factory, publisher_factory=publisher_factory)
+    d = Daemon(
+        cfg,
+        serial_factory=serial_factory,
+        publisher_factory=publisher_factory,
+        integrator=_make_fake_integrator(),
+    )
     for _ in range(3):
         d.run_one_hot_cycle()
     # inv1 should still publish data; inv2 marked offline
@@ -151,10 +187,141 @@ def test_daemon_lifecycle_calls_connect_and_disconnect(cfg, monkeypatch):
 
     monkeypatch.setattr(Daemon, "_loop_forever", fake_loop_forever)
 
-    d = Daemon(cfg, serial_factory=serial_factory, publisher_factory=publisher_factory)
+    d = Daemon(
+        cfg,
+        serial_factory=serial_factory,
+        publisher_factory=publisher_factory,
+        integrator=_make_fake_integrator(),
+    )
     with pytest.raises(KeyboardInterrupt):
         d.start()
     fake_pub.connect.assert_called_once()
     fake_pub.publish_discovery.assert_called_once()
     fake_pub.set_online.assert_called_once()
     fake_pub.disconnect.assert_called_once()
+
+
+def test_daemon_publishes_energy_sensors(cfg, tmp_path):
+    """F-2: after a few hot cycles, the publisher should receive calls for
+    the 6 energy accumulator keys via publish_values."""
+    serial_factory = _make_serial_factory(
+        lambda slave, addr, count: _real_frame_for(addr, count, slave)
+    )
+    fake_pub = MagicMock()
+    publisher_factory = MagicMock(return_value=fake_pub)
+    # Use a real EnergyIntegrator so the integration math is exercised.
+    integrator = EnergyIntegrator(persist_path=tmp_path / "e.json")
+    d = Daemon(
+        cfg,
+        serial_factory=serial_factory,
+        publisher_factory=publisher_factory,
+        integrator=integrator,
+    )
+    # Three cycles: first establishes the time baseline (elapsed=0), the
+    # remaining two accumulate energy.
+    for _ in range(3):
+        d.run_one_hot_cycle()
+    pv_calls = fake_pub.publish_values.call_args_list
+    assert pv_calls, "expected at least one publish_values call"
+    # The last cycle's aggregated payload should contain all 6 energy keys.
+    last_payload = pv_calls[-1].args[0]
+    for key in (
+        "battery_energy_in",
+        "battery_energy_out",
+        "pv_energy",
+        "load_energy",
+        "grid_energy_in",
+        "grid_energy_out",
+    ):
+        assert key in last_payload, f"missing energy key: {key}"
+        assert isinstance(last_payload[key], (int, float))
+
+
+def test_daemon_calls_integrator_save_on_cold_cycle(cfg):
+    """Cold cycle should persist the energy accumulator (so a restart near
+    the cycle boundary doesn't lose minutes of integration)."""
+    serial_factory = _make_serial_factory(
+        lambda slave, addr, count: _real_frame_for(addr, count, slave)
+    )
+    fake_pub = MagicMock()
+    publisher_factory = MagicMock(return_value=fake_pub)
+    fake_integrator = _make_fake_integrator()
+    d = Daemon(
+        cfg,
+        serial_factory=serial_factory,
+        publisher_factory=publisher_factory,
+        integrator=fake_integrator,
+    )
+    fake_integrator.save.assert_not_called()
+    d.run_one_cold_cycle()
+    fake_integrator.save.assert_called()
+
+
+def test_daemon_saves_energy_state_on_clean_shutdown(cfg, monkeypatch):
+    """start() must persist energy state in its `finally:` block so a clean
+    SIGTERM doesn't lose the in-memory kWh totals."""
+    serial_factory = _make_serial_factory(
+        lambda slave, addr, count: _real_frame_for(addr, count, slave)
+    )
+    fake_pub = MagicMock()
+    publisher_factory = MagicMock(return_value=fake_pub)
+    fake_integrator = _make_fake_integrator()
+
+    def fake_loop_forever(self):
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr(Daemon, "_loop_forever", fake_loop_forever)
+
+    d = Daemon(
+        cfg,
+        serial_factory=serial_factory,
+        publisher_factory=publisher_factory,
+        integrator=fake_integrator,
+    )
+    with pytest.raises(KeyboardInterrupt):
+        d.start()
+    # save() must have been called in the finally: block before disconnect.
+    fake_integrator.save.assert_called()
+
+
+def test_daemon_passes_elapsed_seconds_to_integrator(cfg, monkeypatch):
+    """The integrator's update() must receive a non-negative elapsed_s on
+    the second hot cycle (first cycle is elapsed=0 by design)."""
+    serial_factory = _make_serial_factory(
+        lambda slave, addr, count: _real_frame_for(addr, count, slave)
+    )
+    fake_pub = MagicMock()
+    publisher_factory = MagicMock(return_value=fake_pub)
+    fake_integrator = _make_fake_integrator()
+
+    # Drive monotonic clock deterministically.
+    fake_clock = iter(
+        [100.0, 100.0, 100.1, 100.1,  # cycle 1: cycle_start, now, set_online?, meta
+         103.2, 103.2, 103.3, 103.3,  # cycle 2
+         106.5, 106.5, 106.6, 106.6]  # cycle 3
+    )
+
+    def next_clock():
+        try:
+            return next(fake_clock)
+        except StopIteration:
+            return 999.0
+
+    monkeypatch.setattr("inverter_bridge.daemon.time.monotonic", next_clock)
+
+    d = Daemon(
+        cfg,
+        serial_factory=serial_factory,
+        publisher_factory=publisher_factory,
+        integrator=fake_integrator,
+    )
+    d.run_one_hot_cycle()
+    d.run_one_hot_cycle()
+
+    # First call to update() should be elapsed_s = 0 (no prior baseline).
+    # Second call should be > 0.
+    assert fake_integrator.update.call_count >= 2
+    first_kwargs = fake_integrator.update.call_args_list[0].kwargs
+    second_kwargs = fake_integrator.update.call_args_list[1].kwargs
+    assert first_kwargs.get("elapsed_s") == 0.0
+    assert second_kwargs.get("elapsed_s", 0) > 0

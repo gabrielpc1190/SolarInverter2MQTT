@@ -142,4 +142,24 @@ def aggregate_inverters(
     if pv_any:
         out["pv_power"] = round(pv_total, 1)
 
+    # F-7 fix: split-phase system has only L1+L2. Solar Assistant historically
+    # exposed `_3` (third-phase) sensors as compat-zero placeholders. We publish
+    # them explicitly as 0.0 (rather than omitting them) so the existing HA
+    # entities keep getting fresh updates (force_update: true bumps last_updated
+    # even when value is unchanged), instead of going stale.
+    for i in range(1, len(per_inverter) + 1):
+        out[f"inverter_{i}_load_power_3"] = 0.0
+        out[f"inverter_{i}_grid_power_3"] = 0.0
+        out[f"inverter_{i}_grid_voltage_3"] = 0.0
+        out[f"inverter_{i}_pv_power_3"] = 0.0
+
+    # F-9 fix: rated installed battery capacity (kWh).
+    # SA historically published `sensor.gadi_inverters_capacity = 72.6` as a
+    # static value from the inverter config block 0xE116. We hardcode it here
+    # for entity-name continuity. The real DEGRADED bank capacity (57 kWh)
+    # lives in HA as `input_number.capacidad_bateria_kwh` and is the
+    # authoritative figure for energy automations — `capacity` published here
+    # is only kept for backwards compat with the existing SA sensor name.
+    out["capacity"] = 72.6
+
     return out
