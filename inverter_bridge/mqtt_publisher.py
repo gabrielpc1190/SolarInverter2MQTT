@@ -121,6 +121,20 @@ FORCE_UPDATE_KEY_SUFFIXES: tuple[str, ...] = (
     "charge_state",
     "load_percentage",
     "inverter_state_code",
+    # Grid sensors are always 0 in home's offgrid setup; force_update keeps them
+    # from going stale in HA (they'd otherwise appear `unavailable` after the
+    # default 5 min staleness threshold).
+    "grid_voltage",
+    "grid_voltage_1",
+    "grid_voltage_2",
+    "grid_voltage_3",
+    "grid_frequency",
+    "grid_power",
+    "grid_power_1",
+    "grid_power_2",
+    "grid_power_3",
+    "grid_energy_in",
+    "grid_energy_out",
 )
 
 
