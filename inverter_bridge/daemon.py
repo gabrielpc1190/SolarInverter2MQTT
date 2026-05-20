@@ -59,7 +59,11 @@ class Daemon:
             self.publisher.disconnect()
 
     def _loop_forever(self) -> None:
-        last_cold = 0.0
+        # Initialize last_cold to "now" so the first cold cycle runs cold_interval_s
+        # AFTER startup, not immediately. The first iteration is hot-only, ensuring
+        # MQTT publishes start within ~3s of daemon start (not delayed by the slow
+        # cold-block polling on the noisy inv1 bus).
+        last_cold = time.monotonic()
         while True:
             cycle_start = time.monotonic()
             try:

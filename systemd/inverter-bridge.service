@@ -7,10 +7,11 @@ Wants=network-online.target
 Type=simple
 User=inverter-bridge
 Group=dialout
-ExecStart=/opt/inverter-bridge/.venv/bin/python -m inverter_bridge --config /etc/inverter-bridge.yaml
+ExecStart=/opt/inverter-bridge/src/.venv/bin/python -m inverter_bridge --config /etc/inverter-bridge.yaml
 Restart=always
 RestartSec=5s
-WatchdogSec=30s
+# WatchdogSec disabled — daemon does not send sd_notify pings yet.
+# TODO Phase 1: integrate sd_notify so we can re-enable watchdog.
 
 # Security hardening (compatible with /dev/ttyUSB* + /etc + /var/log access)
 NoNewPrivileges=true
