@@ -1,5 +1,7 @@
 """Tests for the daemon main loop using injected fakes for serial + MQTT."""
 
+import threading
+import time
 from unittest.mock import MagicMock
 
 import pytest
@@ -325,3 +327,153 @@ def test_daemon_passes_elapsed_seconds_to_integrator(cfg, monkeypatch):
     second_kwargs = fake_integrator.update.call_args_list[1].kwargs
     assert first_kwargs.get("elapsed_s") == 0.0
     assert second_kwargs.get("elapsed_s", 0) > 0
+
+
+# ---------- F-5: parallel per-inverter polling ----------
+
+
+def test_hot_cycle_polls_in_parallel(cfg):
+    """Two inverters polled concurrently: total wall time ≈ max(per-inv), not sum.
+
+    Each query() blocks for ~0.5s. With 3 hot blocks/inverter, sequential
+    would be ~3.0s (2 inv * 3 blocks * 0.5s). Parallel should be ~1.5s
+    (3 blocks * 0.5s on the slower of two concurrent inverters).
+    """
+    per_query_delay = 0.5
+
+    def slow_query(slave, addr, count):
+        time.sleep(per_query_delay)
+        return _real_frame_for(addr, count, slave)
+
+    serial_factory = _make_serial_factory(slow_query)
+    fake_pub = MagicMock()
+    publisher_factory = MagicMock(return_value=fake_pub)
+    d = Daemon(
+        cfg,
+        serial_factory=serial_factory,
+        publisher_factory=publisher_factory,
+        integrator=_make_fake_integrator(),
+    )
+    t0 = time.monotonic()
+    d.run_one_hot_cycle()
+    elapsed = time.monotonic() - t0
+    # Sequential would be 2 inverters * 3 hot blocks * 0.5s = 3.0s.
+    # Parallel must be well under 3.0s (~1.5-1.7s typical). 2.5s gives a
+    # generous threshold that catches a regression to sequential while
+    # tolerating CI jitter.
+    assert elapsed < 2.5, (
+        f"hot cycle took {elapsed:.2f}s — looks sequential "
+        f"(expected ~1.5s parallel, sequential would be ~3.0s)"
+    )
+
+
+def test_hot_cycle_thread_safety_concurrent_fails(cfg):
+    """Both inverters fail simultaneously: fail_count must not double-count.
+
+    Three cycles where every block on every inverter raises TimeoutError.
+    After three cycles, each inverter's fail count must be exactly 3
+    (not e.g. 6 from a race that increments both threads' counts twice).
+    """
+    barrier = threading.Barrier(len(cfg.inverters))
+
+    def failing_query(slave, addr, count):
+        # First block of each cycle: sync the two threads so they hit the
+        # fail-count increment as close in time as possible, exposing any race.
+        if addr == 0x0100:
+            try:
+                barrier.wait(timeout=2.0)
+            except threading.BrokenBarrierError:
+                pass
+        raise TimeoutError("simulated bus failure")
+
+    serial_factory = _make_serial_factory(failing_query)
+    fake_pub = MagicMock()
+    publisher_factory = MagicMock(return_value=fake_pub)
+    d = Daemon(
+        cfg,
+        serial_factory=serial_factory,
+        publisher_factory=publisher_factory,
+        integrator=_make_fake_integrator(),
+    )
+    for _ in range(3):
+        barrier.reset()
+        d.run_one_hot_cycle()
+    # Each inverter saw 3 fully-failed cycles. No double-counting from races.
+    assert d._fail_count["inv1"] == 3, d._fail_count
+    assert d._fail_count["inv2"] == 3, d._fail_count
+
+
+def test_executor_shutdown_on_disconnect(cfg, monkeypatch):
+    """After Daemon.start() exits, the thread pool executor must be shut down.
+
+    Guards against thread leaks on clean shutdown.
+    """
+    serial_factory = _make_serial_factory(
+        lambda slave, addr, count: _real_frame_for(addr, count, slave)
+    )
+    fake_pub = MagicMock()
+    publisher_factory = MagicMock(return_value=fake_pub)
+
+    def fake_loop_forever(self):
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr(Daemon, "_loop_forever", fake_loop_forever)
+
+    d = Daemon(
+        cfg,
+        serial_factory=serial_factory,
+        publisher_factory=publisher_factory,
+        integrator=_make_fake_integrator(),
+    )
+    with pytest.raises(KeyboardInterrupt):
+        d.start()
+    # ThreadPoolExecutor exposes `_shutdown` (bool) set True by shutdown().
+    assert d._executor._shutdown is True, "executor was not shut down by start()"
+
+
+def test_per_inverter_timeout_doesnt_block_other_inverter(cfg, monkeypatch):
+    """If one inverter's worker hangs, the cycle must complete using the
+    other inverter's data within ~the worker timeout, not the hang duration."""
+    # Force a short worker-level timeout so the test runs quickly.
+    monkeypatch.setattr(Daemon, "_poll_worker_timeout_s", 1.0, raising=False)
+    hang_event = threading.Event()
+
+    def query(slave, addr, count):
+        if slave == 1:
+            # inv1 hangs forever (cancelled at process exit by daemon thread).
+            hang_event.wait(timeout=20.0)
+            raise TimeoutError("would have hung")
+        return _real_frame_for(addr, count, slave)
+
+    serial_factory = _make_serial_factory(query)
+    fake_pub = MagicMock()
+    publisher_factory = MagicMock(return_value=fake_pub)
+    d = Daemon(
+        cfg,
+        serial_factory=serial_factory,
+        publisher_factory=publisher_factory,
+        integrator=_make_fake_integrator(),
+    )
+    # Patch the daemon's runtime worker timeout AFTER construction (since
+    # __init__ computes it from cfg).
+    d._poll_worker_timeout_s = 1.0
+    try:
+        t0 = time.monotonic()
+        d.run_one_hot_cycle()
+        elapsed = time.monotonic() - t0
+        # Should complete within ~timeout + small overhead; well under the 20s hang.
+        assert elapsed < 3.0, (
+            f"cycle took {elapsed:.2f}s — the inv1 hang blocked inv2"
+        )
+        # inv2 data must still be present in the published aggregated payload.
+        pv_calls = fake_pub.publish_values.call_args_list
+        assert pv_calls
+        aggregated = pv_calls[-1].args[0]
+        assert "battery_state_of_charge" in aggregated
+        # inv1 counted as a failed cycle (its fail_count incremented).
+        assert d._fail_count["inv1"] >= 1
+        # inv2 succeeded, so its fail count stays 0.
+        assert d._fail_count["inv2"] == 0
+    finally:
+        # Wake the hanging worker so it doesn't outlive the test.
+        hang_event.set()
