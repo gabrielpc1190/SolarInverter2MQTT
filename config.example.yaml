@@ -27,7 +27,11 @@ mqtt:
   username: inverter_bridge
   password_file: /etc/inverter-bridge.secrets
   client_id: inverter_bridge
-  topic_prefix: gadi_inverters
+  # IMPORTANT: topic_prefix must match what Solar Assistant used historically
+  # ("solar_assistant"). The daemon publishes with SA's unique_id format
+  # (total_*, inverter_N_*) so existing HA entities resume updating without
+  # any dashboard/automation changes. See spec §5.8 for the full mapping.
+  topic_prefix: solar_assistant
   discovery_prefix: homeassistant
   retain_discovery: true
   qos: 0
