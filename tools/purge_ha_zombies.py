@@ -124,6 +124,8 @@ def select_candidates(
     *,
     domain_prefixes: Sequence[str],
     min_age_s: float,
+    include_stale_values: bool = False,
+    canonical_unique_ids: frozenset[str] | None = None,
     now: datetime | None = None,
 ) -> list[RegistryEntry]:
     """Return registry entries that should be removed.
@@ -132,41 +134,53 @@ def select_candidates(
 
       An entity is selected iff ALL of:
         (a) its `entity_id` starts with at least one of `domain_prefixes`;
-        (b) `/api/states` reports a current state of `unavailable` or
-            `unknown` (or the entity is MISSING from `/api/states`
-            entirely, which HA does for fully-stale entities);
-        (c) if a `last_updated` is available, `(now - last_updated) >=
-            min_age_s`. If `last_updated` is missing AND the entity is
-            absent from states or `unavailable`/`unknown`, we treat it
-            as stale enough (the age check defaults to "passes").
+        (b) Either:
+              (b.1) `/api/states` reports a current state of `unavailable`
+                    or `unknown`, OR the entity is MISSING from states
+                    entirely (HA's default for fully-dropped entities);
+              (b.2) If `include_stale_values=True`: the entity has ANY
+                    state value but `(now - last_updated) >= min_age_s`
+                    AND its `unique_id` is NOT in `canonical_unique_ids`.
+                    This catches orphan duplicates with stuck values from
+                    earlier discovery iterations.
+        (c) For (b.1): if `last_updated` is available, the age check
+            must pass. If missing, assume stale.
 
-    `now` defaults to `datetime.now(timezone.utc)`; injected for tests.
+    `canonical_unique_ids` is the safety net: entries with unique_ids
+    matching the spec are NEVER deleted regardless of staleness.
     """
     if now is None:
         now = datetime.now(timezone.utc)
     state_by_id: dict[str, StateRecord] = {s.entity_id: s for s in states}
     prefixes = tuple(domain_prefixes)
+    canonical = canonical_unique_ids or frozenset()
     out: list[RegistryEntry] = []
     for entry in registry:
         if not entry.entity_id.startswith(prefixes):
             continue
+        # Safety: never delete an entity whose unique_id is canonical
+        if entry.unique_id and entry.unique_id in canonical:
+            continue
         st = state_by_id.get(entry.entity_id)
         if st is None:
-            # Entity in registry but not in /api/states: HA has not
-            # produced a state since restart, or it's been stale long
-            # enough to drop. Treat as a zombie unconditionally.
+            # Entity in registry but not in /api/states: zombie.
             out.append(entry)
             continue
-        if st.state not in STALE_STATES:
+        if st.state in STALE_STATES:
+            # Original rule (b.1): unavailable/unknown + age check
+            if st.last_updated is None:
+                out.append(entry)
+                continue
+            age_s = (now - st.last_updated).total_seconds()
+            if age_s >= min_age_s:
+                out.append(entry)
             continue
-        if st.last_updated is None:
-            # State is unavailable/unknown but no timestamp; we still
-            # consider it stale enough to delete.
-            out.append(entry)
-            continue
-        age_s = (now - st.last_updated).total_seconds()
-        if age_s >= min_age_s:
-            out.append(entry)
+        if include_stale_values and st.last_updated is not None:
+            # Rule (b.2): valid value but stale last_updated AND
+            # unique_id not canonical AND not in protected list above.
+            age_s = (now - st.last_updated).total_seconds()
+            if age_s >= min_age_s:
+                out.append(entry)
     return out
 
 
@@ -517,11 +531,31 @@ async def _run_async(args: argparse.Namespace) -> int:
                 log.error("entity_registry/list failed: %s", e)
                 return 4
 
+            # Optional: load canonical spec for safety net
+            canonical_uids: frozenset[str] | None = None
+            if args.canonical_spec:
+                try:
+                    with open(args.canonical_spec) as fh:
+                        spec = json.load(fh)
+                    uids: set[str] = set()
+                    uids.update(spec.get("aggregates", []))
+                    uids.update(spec.get("meta", []))
+                    uids.update(spec.get("binary_sensors", []))
+                    for n in (1, 2):  # canonical inverter count
+                        for suf in spec.get("per_inverter_suffixes", []):
+                            uids.add(f"inverter_{n}_{suf}")
+                    canonical_uids = frozenset(uids)
+                    log.info("loaded %d canonical unique_ids (safety net)", len(canonical_uids))
+                except (OSError, json.JSONDecodeError) as e:
+                    log.warning("canonical spec load failed: %s — proceeding WITHOUT safety net", e)
+
             # Step 5: cross-reference.
             candidates = select_candidates(
                 registry, states,
                 domain_prefixes=args.domain,
                 min_age_s=args.unavailable_min_age_s,
+                include_stale_values=args.include_stale_values,
+                canonical_unique_ids=canonical_uids,
             )
 
             # Step 6: report.
@@ -603,6 +637,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--yes", "-y", action="store_true",
         help="Skip the interactive confirmation prompt in --apply mode",
+    )
+    parser.add_argument(
+        "--include-stale-values",
+        action="store_true",
+        help="Also select entities with VALID state values whose last_updated "
+             "exceeds --unavailable-min-age-s. Use with --canonical-spec for safety: "
+             "canonical unique_ids are NEVER deleted regardless.",
+    )
+    parser.add_argument(
+        "--canonical-spec",
+        type=str, default=None,
+        help="Path to MQTT_CANONICAL.json. Entities with unique_id in this spec "
+             "are protected from deletion. STRONGLY recommended when using "
+             "--include-stale-values.",
     )
     parser.add_argument(
         "--log-level", default="INFO",
