@@ -163,4 +163,36 @@ def aggregate_inverters(
     # `input_number.*` helper that your automations actually consume.
     out["capacity"] = 72.6
 
+    # Daily stats + device info + 7-day historical PV — cold block extractions.
+    # Each block is optional; when not present (because we're in a hot-only
+    # cycle), those keys are simply not emitted. Per-inverter keys + total sums.
+    daily_keys = ("battery_charge_ah_today", "battery_discharge_ah_today",
+                  "pv_energy_today", "load_energy_today")
+    history_keys = tuple(f"pv_energy_{d}" for d in
+                         ("yesterday", "2_days_ago", "3_days_ago", "4_days_ago",
+                          "5_days_ago", "6_days_ago", "7_days_ago"))
+    diag_keys = ("firmware_version", "hardware_version")
+    daily_sums: dict[str, float] = {}
+
+    for i, inv in enumerate(per_inverter, start=1):
+        daily = inv.get("daily_stats")
+        if daily is not None:
+            for k in daily_keys:
+                if k in daily.fields:
+                    v = daily.fields[k]
+                    out[f"inverter_{i}_{k}"] = v
+                    daily_sums[k] = daily_sums.get(k, 0.0) + v
+        ctrs = inv.get("runtime_ctrs")
+        if ctrs is not None:
+            for k in history_keys:
+                if k in ctrs.fields:
+                    out[f"inverter_{i}_{k}"] = ctrs.fields[k]
+        info = inv.get("device_info")
+        if info is not None:
+            for k in diag_keys:
+                if k in info.fields:
+                    out[f"inverter_{i}_{k}"] = info.fields[k]
+    for k, total in daily_sums.items():
+        out[k] = round(total, 2)
+
     return out

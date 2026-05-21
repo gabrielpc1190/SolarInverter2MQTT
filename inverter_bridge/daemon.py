@@ -175,8 +175,15 @@ class Daemon:
         )
 
     def run_one_cold_cycle(self) -> None:
-        """Poll all cold-tier blocks on both inverters in parallel. Doesn't publish."""
-        self._poll_all_parallel(tier=BlockTier.COLD)
+        """Poll cold-tier blocks on both inverters in parallel, then publish
+        whatever cold-block fields the aggregator can derive (daily stats,
+        7-day PV history, firmware/hardware versions). Hot-block keys are
+        absent in this aggregated dict because the cold tier doesn't include
+        battery / state / pv_temps_l2."""
+        per_inverter, _ = self._poll_all_parallel(tier=BlockTier.COLD)
+        cold_values = aggregate_inverters(per_inverter)
+        if cold_values:
+            self.publisher.publish_values(cold_values)
         # Persist accumulated energy on every cold cycle so a restart near a
         # cycle boundary doesn't lose minutes of integration.
         self.save_energy_state()

@@ -57,6 +57,11 @@ AGGREGATE_SENSORS: dict[str, tuple[str, str | None, str | None]] = {
     "grid_frequency":           ("Hz",  "frequency",     "measurement"),
     "mode":                     ("",    None,            None),
     "capacity":                 ("kWh", "energy",        None),
+    # Daily-stat sums across inverters (cold-cycle published, from 0xF02C).
+    "pv_energy_today":          ("kWh", "energy",        "total_increasing"),
+    "load_energy_today":        ("kWh", "energy",        "total_increasing"),
+    "battery_charge_ah_today":  ("Ah",  None,            "total_increasing"),
+    "battery_discharge_ah_today":("Ah", None,            "total_increasing"),
 }
 
 # Per-inverter sensors (without the `inverter_N_` prefix; that is added at publish time).
@@ -88,6 +93,22 @@ PER_INVERTER_SENSORS: dict[str, tuple[str, str | None, str | None]] = {
     "pv_power_mppt2":           ("W",   "power",         "measurement"),
     "device_mode":              ("",    None,            None),
     "charge_state":             ("",    None,            None),
+    # Daily stats (per-inverter, from 0xF02C cold block).
+    "pv_energy_today":          ("kWh", "energy",        "total_increasing"),
+    "load_energy_today":        ("kWh", "energy",        "total_increasing"),
+    "battery_charge_ah_today":  ("Ah",  None,            "total_increasing"),
+    "battery_discharge_ah_today":("Ah", None,            "total_increasing"),
+    # 7-day historical PV (per-inverter, from 0xF000 cold block).
+    "pv_energy_yesterday":      ("kWh", "energy",        "measurement"),
+    "pv_energy_2_days_ago":     ("kWh", "energy",        "measurement"),
+    "pv_energy_3_days_ago":     ("kWh", "energy",        "measurement"),
+    "pv_energy_4_days_ago":     ("kWh", "energy",        "measurement"),
+    "pv_energy_5_days_ago":     ("kWh", "energy",        "measurement"),
+    "pv_energy_6_days_ago":     ("kWh", "energy",        "measurement"),
+    "pv_energy_7_days_ago":     ("kWh", "energy",        "measurement"),
+    # Diagnostic (per-inverter, from 0x0014 device_info cold block).
+    "firmware_version":         ("",    None,            None),
+    "hardware_version":         ("",    None,            None),
 }
 
 # Energy accumulators (F-2 discovery). Values are produced by the

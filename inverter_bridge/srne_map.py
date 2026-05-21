@@ -101,6 +101,29 @@ FIELDS: list[Field] = [
     # PV power is COMPUTED as V x I in the aggregator, not read directly.
     Field(0x0223, 15, "pv1_current",             0.01, False, "A",  "current",  "measurement"),   # 0x0232
     Field(0x0223, 17, "pv2_current",             0.01, False, "A",  "current",  "measurement"),   # 0x0234
+
+    # device_info block 0x0014..0x001D — diagnostic, polled cold every 60 s.
+    # Verified 2026-05-20 against SRNE V1.96 PDF (raw 818 -> "V8.18", etc.).
+    Field(0x0014, 0,  "firmware_version",        0.01, False, "",   None,       None),     # 0x0014 SoftWareVersion
+    Field(0x0014, 3,  "hardware_version",        0.01, False, "",   None,       None),     # 0x0017 HardWareVersion power-board
+
+    # runtime_counters block 0xF000..0xF007 — daily PV history (kWh), last 7 days.
+    # Verified 2026-05-20 against SRNE V1.96 PDF.
+    Field(0xF000, 0,  "pv_energy_yesterday",     0.1,  False, "kWh","energy",   "measurement"),  # 0xF000
+    Field(0xF000, 1,  "pv_energy_2_days_ago",    0.1,  False, "kWh","energy",   "measurement"),  # 0xF001
+    Field(0xF000, 2,  "pv_energy_3_days_ago",    0.1,  False, "kWh","energy",   "measurement"),  # 0xF002
+    Field(0xF000, 3,  "pv_energy_4_days_ago",    0.1,  False, "kWh","energy",   "measurement"),  # 0xF003
+    Field(0xF000, 4,  "pv_energy_5_days_ago",    0.1,  False, "kWh","energy",   "measurement"),  # 0xF004
+    Field(0xF000, 5,  "pv_energy_6_days_ago",    0.1,  False, "kWh","energy",   "measurement"),  # 0xF005
+    Field(0xF000, 6,  "pv_energy_7_days_ago",    0.1,  False, "kWh","energy",   "measurement"),  # 0xF006
+
+    # daily_stats block 0xF02C..0xF03D — today's accumulators, reset daily.
+    # Verified 2026-05-20 against SRNE V1.96 PDF; values match observed
+    # magnitudes (e.g. raw 163 -> "163 Ah charged today", raw 183 -> "18.3 kWh PV today").
+    Field(0xF02C, 1,  "battery_charge_ah_today",     1.0, False, "Ah", None,      "total_increasing"),  # 0xF02D
+    Field(0xF02C, 2,  "battery_discharge_ah_today",  1.0, False, "Ah", None,      "total_increasing"),  # 0xF02E
+    Field(0xF02C, 3,  "pv_energy_today",             0.1, False, "kWh","energy",  "total_increasing"),  # 0xF02F
+    Field(0xF02C, 4,  "load_energy_today",           0.1, False, "kWh","energy",  "total_increasing"),  # 0xF030
 ]
 
 

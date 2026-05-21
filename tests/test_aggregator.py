@@ -46,6 +46,38 @@ def _make_state(active_p: float, temp_max: float = 40.0) -> ParsedBlock:
     )
 
 
+def _make_daily_stats(pv_kwh: float, load_kwh: float, ah_in: float, ah_out: float) -> ParsedBlock:
+    return ParsedBlock(
+        block_addr=0xF02C,
+        block_name="daily_stats",
+        slave=0,
+        regs_raw=(),
+        fields={
+            "battery_charge_ah_today": ah_in,
+            "battery_discharge_ah_today": ah_out,
+            "pv_energy_today": pv_kwh,
+            "load_energy_today": load_kwh,
+        },
+    )
+
+
+def _make_runtime_ctrs(daily_history: list[float]) -> ParsedBlock:
+    fields = {f"pv_energy_{d}": v for d, v in zip(
+        ("yesterday","2_days_ago","3_days_ago","4_days_ago","5_days_ago","6_days_ago","7_days_ago"),
+        daily_history, strict=True)}
+    return ParsedBlock(block_addr=0xF000, block_name="runtime_ctrs", slave=0, regs_raw=(), fields=fields)
+
+
+def _make_device_info(fw: float, hw: float) -> ParsedBlock:
+    return ParsedBlock(
+        block_addr=0x0014,
+        block_name="device_info",
+        slave=0,
+        regs_raw=(),
+        fields={"firmware_version": fw, "hardware_version": hw},
+    )
+
+
 def _make_pv(pv1_w: float, pv2_w: float) -> ParsedBlock:
     """Build a PV block fixture; convert input watts to the underlying current
     (registers store I, aggregator computes P = V x I with V = 260)."""
@@ -293,3 +325,49 @@ def test_capacity_published_even_without_battery_block():
     block reads fail this cycle."""
     out = aggregate_inverters([{}])
     assert out["capacity"] == 72.6
+
+
+# --- Cold-block sensors (daily stats + 7-day history + diagnostics) ----------
+
+def test_daily_stats_per_inverter_and_aggregate_sum():
+    """Daily stats fields publish per-inverter and as `total_*` aggregate sums."""
+    inv1 = {"daily_stats": _make_daily_stats(pv_kwh=18.3, load_kwh=16.3, ah_in=163, ah_out=167)}
+    inv2 = {"daily_stats": _make_daily_stats(pv_kwh=15.9, load_kwh=17.4, ah_in=159, ah_out=174)}
+    out = aggregate_inverters([inv1, inv2])
+    # per-inverter
+    assert out["inverter_1_pv_energy_today"] == 18.3
+    assert out["inverter_1_load_energy_today"] == 16.3
+    assert out["inverter_1_battery_charge_ah_today"] == 163
+    assert out["inverter_2_pv_energy_today"] == 15.9
+    # aggregate = sum
+    assert out["pv_energy_today"] == 34.2
+    assert out["load_energy_today"] == 33.7
+    assert out["battery_charge_ah_today"] == 322
+    assert out["battery_discharge_ah_today"] == 341
+
+
+def test_daily_stats_missing_block_omits_keys():
+    """If the cold poll skipped daily_stats, the aggregator must not emit those keys."""
+    inv1 = {"battery": _make_battery(soc=50, v=52.0, i=0.0)}
+    out = aggregate_inverters([inv1])
+    assert "pv_energy_today" not in out
+    assert "inverter_1_pv_energy_today" not in out
+
+
+def test_pv_history_per_inverter():
+    """7-day PV history publishes per-inverter (no aggregate sum — those would be
+    misleading since each day is already a kWh total per-inverter)."""
+    inv1 = {"runtime_ctrs": _make_runtime_ctrs([27.3, 35.8, 27.4, 33.4, 42.4, 28.9, 36.6])}
+    out = aggregate_inverters([inv1])
+    assert out["inverter_1_pv_energy_yesterday"] == 27.3
+    assert out["inverter_1_pv_energy_7_days_ago"] == 36.6
+    # not aggregated
+    assert "pv_energy_yesterday" not in out
+
+
+def test_device_info_diagnostics():
+    """firmware_version + hardware_version publish per-inverter."""
+    inv1 = {"device_info": _make_device_info(fw=8.18, hw=3.04)}
+    out = aggregate_inverters([inv1])
+    assert out["inverter_1_firmware_version"] == 8.18
+    assert out["inverter_1_hardware_version"] == 3.04
