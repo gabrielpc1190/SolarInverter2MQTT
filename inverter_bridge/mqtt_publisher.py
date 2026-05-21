@@ -136,6 +136,15 @@ FORCE_UPDATE_KEY_SUFFIXES: tuple[str, ...] = (
     "grid_power_3",
     "grid_energy_in",
     "grid_energy_out",
+    # Battery and PV/load energy accumulators are `state_class: total_increasing`
+    # so they only emit DB rows when they increment. When a counter is flat
+    # (e.g. `battery_energy_out` while the bank is charging) HA shows the entity
+    # as stale because last_updated doesn't refresh. force_update bumps
+    # last_updated on every received MQTT message so the watchdog sees activity.
+    "battery_energy_in",
+    "battery_energy_out",
+    "pv_energy",
+    "load_energy",
 )
 
 
