@@ -51,31 +51,47 @@ def aggregate_inverters(
         # SA convention: positive = charging
         out["battery_power"] = round(avg_v * total_i, 1)
 
-    # State block: load + temps + AC output + per-inverter mode
-    inv_active_powers: list[float] = []
+    # State block: load Phase A active/apparent + grid (Phase A) + temps + mode.
+    # NB: per V1.96 spec, register 0x021B is Load *Phase A* active power, NOT
+    # the L1+L2 sum (the previous comment was wrong, causing the bridge to
+    # under-report site load by ~50% on balanced 240V loads). Phase B active
+    # power comes from the separate phase_b block below; per-inverter
+    # `load_power` is the sum of both phases.
     inv1_state: ParsedBlock | None = None
+    site_load_active_total = 0.0
+    site_load_any = False
     for i, inv in enumerate(per_inverter, start=1):
         s = inv.get("state")
         if s is None:
             continue
         if i == 1:
             inv1_state = s
-        active_p = s.fields["inverter_active_power"]
-        inv_active_powers.append(active_p)
-        out[f"inverter_{i}_load_power"] = active_p
-        out[f"inverter_{i}_load_apparent_power"] = s.fields["inverter_apparent_power_l1"]
+        active_a = s.fields["load_active_phase_a"]
+        # Sum L1 + L2 active to get this inverter's TOTAL real load delivery.
+        phase_b = inv.get("phase_b")
+        active_b = phase_b.fields["load_active_phase_b"] if phase_b is not None else 0.0
+        total_active = active_a + active_b
+        out[f"inverter_{i}_load_power"] = round(total_active, 1)
+        out[f"inverter_{i}_load_power_l1"] = round(active_a, 1)
+        out[f"inverter_{i}_load_power_l2"] = round(active_b, 1)
+        site_load_active_total += total_active
+        site_load_any = True
+        # Apparent power: per-leg from registers (when both available).
+        apparent_a = s.fields["load_apparent_phase_a"]
+        out[f"inverter_{i}_load_apparent_power_l1"] = round(apparent_a, 1)
+        if phase_b is not None and "load_apparent_phase_b" in phase_b.fields:
+            apparent_b = phase_b.fields["load_apparent_phase_b"]
+            out[f"inverter_{i}_load_apparent_power_l2"] = round(apparent_b, 1)
+            out[f"inverter_{i}_load_apparent_power"] = round(apparent_a + apparent_b, 1)
+        else:
+            out[f"inverter_{i}_load_apparent_power"] = round(apparent_a, 1)
         out[f"inverter_{i}_load_percentage"] = s.fields["load_percent"]
         out[f"inverter_{i}_ac_output_frequency"] = s.fields["ac_output_frequency"]
         out[f"inverter_{i}_grid_frequency"] = s.fields["grid_frequency"]
-        # Grid: inverter only exposes the L1 phase reading, so we publish a
-        # single per-inverter `grid_voltage` and `grid_power` (no phase suffix).
+        # Grid: inverter only exposes Phase A. Keep single per-inverter sensor.
         out[f"inverter_{i}_grid_voltage"] = s.fields["grid_voltage_l1"]
         out[f"inverter_{i}_grid_power"] = round(
             s.fields["grid_voltage_l1"] * s.fields["grid_current_l1"], 1
-        )
-        # AC output per phase (V_phase * I_phase)
-        out[f"inverter_{i}_load_power_l1"] = round(
-            s.fields["ac_output_voltage_l1"] * s.fields["ac_output_current_l1"], 1
         )
         # Temperatures
         t_dc_dc = s.fields["temperature_dc_dc"]
@@ -91,8 +107,13 @@ def aggregate_inverters(
             code, f"unknown_code_{code}"
         )
         out[f"inverter_{i}_bus_voltage"] = s.fields["bus_voltage"]
-    if inv_active_powers:
-        out["load_power"] = round(sum(inv_active_powers), 1)
+        # Combined L1+L2 AC output voltage (~240 V)
+        if phase_b is not None and "ac_output_voltage_l2" in phase_b.fields:
+            v_l1 = s.fields["ac_output_voltage_l1"]
+            v_l2 = phase_b.fields["ac_output_voltage_l2"]
+            out[f"inverter_{i}_ac_output_voltage"] = round(v_l1 + v_l2, 1)
+    if site_load_any:
+        out["load_power"] = round(site_load_active_total, 1)
         # Site-wide mode = inv1's mode (they sync in split-phase)
         if "inverter_1_device_mode" in out:
             out["mode"] = out["inverter_1_device_mode"]
@@ -106,51 +127,39 @@ def aggregate_inverters(
         )
         out["bus_voltage"] = inv1_state.fields["bus_voltage"]
 
-    # PV + L2 (split-phase) + per-phase L2 apparent
-    # Note: PV1/PV2 are stored as CURRENTS (A) in the inverter registers; we compute
-    # power as V x I. Confirmed empirically 2026-05-20 (energy balance).
-    #
-    # Night-time gate (added 2026-05-20): when the inverter is NOT charging from
-    # PV (charge_state_code ∉ {1=PV, 3=Float}), the pv_voltage / pv_current
-    # registers report fake values (pv_voltage tracks bus_voltage/2, pv_current
-    # is a stray reading from the boost converter, not a real solar measurement).
-    # Without this gate the bridge reports ~1500-1700 W of phantom PV at night,
-    # which breaks energy balance and trips `binary_sensor.solar_excess_stable`.
-    PV_ACTIVE_CHARGE_CODES = {1, 3}  # 1 = PV charging, 3 = Float (PV-driven)
+    # PV — read DIRECTLY from firmware MPPT registers per V1.96 spec.
+    #   PV1: block "battery" (0x0100), offsets 7/8/9 = 0x0107/0x0108/0x0109 (V/I/P)
+    #   PV2: block "pv2"     (0x010F), offsets 0/1/2 = 0x010F/0x0110/0x0111 (V/I/P)
+    # Previously the bridge multiplied (bus_voltage/2) x (L2 active power)
+    # which yielded ~1500W phantom PV at night and required a charge_state
+    # gate as a band-aid. Real registers report 0 at night naturally, so
+    # no gate is needed.
     pv_total = 0.0
     pv_any = False
     for i, inv in enumerate(per_inverter, start=1):
-        pv = inv.get("pv_temps_l2")
-        if pv is None:
-            continue
-        pv_any = True
-        # Gate from battery block's charge_state_code; default to inactive if missing.
-        b = inv.get("battery")
-        cs_code = int(b.fields.get("charge_state_code", 0)) if b is not None else 0
-        pv_active = cs_code in PV_ACTIVE_CHARGE_CODES
-        pv1_v = pv.fields["pv1_voltage"] if pv_active else 0.0
-        pv2_v = pv.fields["pv2_voltage"] if pv_active else 0.0
-        pv1_i = pv.fields["pv1_current"] if pv_active else 0.0
-        pv2_i = pv.fields["pv2_current"] if pv_active else 0.0
-        p1 = round(pv1_v * pv1_i, 1)  # PV1 power = V x I
-        p2 = round(pv2_v * pv2_i, 1)
-        v_l2 = pv.fields["ac_output_voltage_l2"]
-        i_l2 = pv.fields["ac_output_current_l2"]
-        pv_total += p1 + p2
+        bat = inv.get("battery")
+        pv2_block = inv.get("pv2")
+        pv1_v = bat.fields.get("pv1_voltage", 0.0) if bat is not None else 0.0
+        pv1_i = bat.fields.get("pv1_current", 0.0) if bat is not None else 0.0
+        pv1_p = bat.fields.get("pv1_power", 0.0) if bat is not None else 0.0
+        pv2_v = pv2_block.fields.get("pv2_voltage", 0.0) if pv2_block is not None else 0.0
+        pv2_i = pv2_block.fields.get("pv2_current", 0.0) if pv2_block is not None else 0.0
+        pv2_p = pv2_block.fields.get("pv2_power", 0.0) if pv2_block is not None else 0.0
+        # pv2_power is signed in the register (defensive); negative or sentinel
+        # values mean idle MPPT — clamp to 0 so dashboards aren't surprised.
+        if pv2_p < 0:
+            pv2_p = 0.0
+        if bat is not None or pv2_block is not None:
+            pv_any = True
+        pv_total += pv1_p + pv2_p
         out[f"inverter_{i}_pv_voltage_mppt1"] = pv1_v
         out[f"inverter_{i}_pv_voltage_mppt2"] = pv2_v
         out[f"inverter_{i}_pv_current_mppt1"] = pv1_i
         out[f"inverter_{i}_pv_current_mppt2"] = pv2_i
         out[f"inverter_{i}_pv_current"] = round(pv1_i + pv2_i, 2)
-        out[f"inverter_{i}_pv_power_mppt1"] = p1
-        out[f"inverter_{i}_pv_power_mppt2"] = p2
-        out[f"inverter_{i}_pv_power"] = round(p1 + p2, 1)
-        out[f"inverter_{i}_load_power_l2"] = round(v_l2 * i_l2, 1)
-        # Combined L1+L2 AC output voltage (SA shows ~240 V)
-        s = inv.get("state")
-        if s is not None:
-            v_l1 = s.fields["ac_output_voltage_l1"]
-            out[f"inverter_{i}_ac_output_voltage"] = round(v_l1 + v_l2, 1)
+        out[f"inverter_{i}_pv_power_mppt1"] = round(pv1_p, 1)
+        out[f"inverter_{i}_pv_power_mppt2"] = round(pv2_p, 1)
+        out[f"inverter_{i}_pv_power"] = round(pv1_p + pv2_p, 1)
     if pv_any:
         out["pv_power"] = round(pv_total, 1)
 

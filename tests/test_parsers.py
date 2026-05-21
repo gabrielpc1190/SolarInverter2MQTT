@@ -63,28 +63,50 @@ def test_parse_state_block_slave01():
     assert parsed.fields["bus_voltage"] == pytest.approx(522.0, abs=0.1)
     assert parsed.fields["ac_output_voltage_l1"] == 120.1
     assert parsed.fields["ac_output_frequency"] == 60.0
-    assert parsed.fields["inverter_active_power"] == 258.0
+    # 0x021B is Load Phase A active power (NOT total — see srne_map.py).
+    # Total per inverter = phase_a + phase_b; phase_b in separate 0x0223 block.
+    assert parsed.fields["load_active_phase_a"] == 258.0
     assert parsed.fields["temperature_dc_dc"] == pytest.approx(39.5, abs=0.05)
     assert parsed.fields["temperature_dc_ac"] == pytest.approx(46.1, abs=0.05)
     assert parsed.fields["temperature_transformer"] == pytest.approx(49.3, abs=0.05)
 
 
-def test_parse_pv_block_slave01():
-    """Real PV: PV1=260.9V/46W, PV2=260.8V/121W, L2 output 120.1V."""
+def test_parse_phase_b_block_slave01():
+    """Block 0x0223 is Phase B (L2 inverter output + L2 load), NOT PV.
+    Fixture was captured 2026-05-20 with a day-PV-active label, but the
+    register interpretations have been corrected per V1.96 spec:
+      - 0x022C = Inverter Phase B output voltage (was right)
+      - 0x022E = Inverter Phase B inductive current (was right)
+      - 0x0232 = Load Phase B active power in W (NOT pv1 current x 0.01)
+      - 0x0234 = Load Phase B apparent power in VA (NOT pv2 current x 0.01)
+    """
     frame = load_frame_from_hex(
         FIXTURES / "block_0223_count23_slave01_pv_temps_l2_day_pv_active.hex",
         count=23,
         slave=0x01,
     )
     parsed = parse_block(block_addr=0x0223, frame=frame)
-    assert parsed.fields["pv1_voltage"] == pytest.approx(260.9, abs=0.05)
-    assert parsed.fields["pv2_voltage"] == pytest.approx(260.8, abs=0.05)
     assert parsed.fields["ac_output_voltage_l2"] == pytest.approx(120.1, abs=0.05)
     assert parsed.fields["ac_output_current_l2"] == pytest.approx(2.1, abs=0.05)
-    # 0x0232 and 0x0234 are PV CURRENT in 0.01A units (verified empirically 2026-05-20).
-    # The original fixture had raw=46 and raw=121 → 0.46 A and 1.21 A.
-    assert parsed.fields["pv1_current"] == pytest.approx(0.46, abs=0.001)
-    assert parsed.fields["pv2_current"] == pytest.approx(1.21, abs=0.001)
+    # Raw 46 at 0x0232 was previously misinterpreted as 0.46 A (PV); per spec
+    # it's 46 W Load Phase B active power. The fixture was captured during a
+    # low-L2-load moment.
+    assert parsed.fields["load_active_phase_b"] == 46.0
+    assert parsed.fields["load_apparent_phase_b"] == 121.0
+
+
+def test_parse_pv1_in_battery_block_slave01():
+    """PV1 V/I/P live in the battery block (0x0100 offsets 7/8/9) per V1.96."""
+    frame = load_frame_from_hex(
+        FIXTURES / "block_0100_count15_slave01_battery_day_pv_active.hex",
+        count=15,
+        slave=0x01,
+    )
+    parsed = parse_block(block_addr=0x0100, frame=frame)
+    # PV1 fields must be present (values depend on the captured moment)
+    assert "pv1_voltage" in parsed.fields
+    assert "pv1_current" in parsed.fields
+    assert "pv1_power" in parsed.fields
 
 
 def test_parse_signed_battery_current_negative():

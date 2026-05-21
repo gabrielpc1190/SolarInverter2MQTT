@@ -44,12 +44,17 @@ def test_critical_sensors_present():
 
 
 def test_battery_block_fields():
+    """Battery block 0x0100 includes battery state + PV1 (per V1.96 spec,
+    PV1 V/I/P live at offsets 7/8/9 of this block, not in a separate block)."""
     fs = fields_for(0x0100)
     assert {f.key for f in fs} == {
         "battery_state_of_charge",
         "battery_voltage",
         "battery_current",
         "charge_state_code",
+        "pv1_voltage",
+        "pv1_current",
+        "pv1_power",
     }
 
 

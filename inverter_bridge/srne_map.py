@@ -45,13 +45,13 @@ BLOCKS: list[Block] = [
     # Hot — polled every 3 s
     Block(0x0100, 15, "battery",       BlockTier.HOT),
     Block(0x0210, 19, "state",         BlockTier.HOT),
-    Block(0x0223, 23, "pv_temps_l2",   BlockTier.HOT),
+    Block(0x0223, 23, "phase_b",       BlockTier.HOT),  # Inverter/load phase B (L2). Renamed 2026-05-21 from "pv_temps_l2" — none of the offsets were actually PV per V1.96 spec.
     # Cold — polled every 60 s
     Block(0x0014, 10, "device_info",   BlockTier.COLD),
     Block(0x0020, 16, "fw_build_date", BlockTier.COLD),  # ASCII "Apr 18 2025 09:27:26"
     Block(0x0030, 16, "fw_model",      BlockTier.COLD),  # ASCII "SR-24031501..."
     Block(0x0040, 8,  "fw_serial",     BlockTier.COLD),  # ASCII continuation
-    Block(0x010F, 3,  "bms",           BlockTier.COLD),
+    Block(0x010F, 3,  "pv2",           BlockTier.HOT),  # PV2 V/I/P per V1.96 spec (NOT BMS as previously mislabeled). Promoted to HOT so PV2 readings refresh every 3s.
     Block(0x0204, 6,  "faults",        BlockTier.COLD),
     Block(0xE116, 11, "config",        BlockTier.COLD),
     Block(0xE000, 8,  "thresholds",    BlockTier.COLD),
@@ -67,6 +67,12 @@ FIELDS: list[Field] = [
     # Sign convention STANDARD (positive = charging, negative = discharging).
     # Cross-validated against SA's historical battery_power sensor empirically.
     Field(0x0100, 2,  "battery_current",         0.1,  True,  "A",  "current",  "measurement"),
+    # PV1 — registers 0x0107..0x0109 per SRNE V1.96 spec. Direct V/I/P from
+    # firmware MPPT measurement. Verified empirically 2026-05-21: at night
+    # all three regs report 0 (matches reality, no sun).
+    Field(0x0100, 7,  "pv1_voltage",             0.1,  False, "V",  "voltage",  "measurement"),  # 0x0107
+    Field(0x0100, 8,  "pv1_current",             0.1,  False, "A",  "current",  "measurement"),  # 0x0108
+    Field(0x0100, 9,  "pv1_power",               1.0,  False, "W",  "power",    "measurement"),  # 0x0109
     Field(0x0100, 11, "charge_state_code",       1.0,  False, "",   None,       None),  # 0x010B
 
     # state block 0x0210..0x0222
@@ -84,23 +90,41 @@ FIELDS: list[Field] = [
     Field(0x0210, 7,  "ac_output_current_l1",    0.1,  False, "A",  "current",  "measurement"),
     Field(0x0210, 8,  "ac_output_frequency",     0.01, False, "Hz", "frequency","measurement"),
     Field(0x0210, 9,  "load_percent_alt",        1.0,  False, "%",  None,       "measurement"),  # 0x0219
-    Field(0x0210, 11, "inverter_active_power",   1.0,  False, "W",  "power",    "measurement"),  # 0x021B sum L1+L2
-    Field(0x0210, 12, "inverter_apparent_power_l1", 1.0, False, "VA","apparent_power","measurement"),  # 0x021C
+    # 0x021B is LOAD PHASE A active power ONLY (per V1.96 spec), NOT a sum.
+    # Bug found 2026-05-21: comment "sum L1+L2" was wrong; bridge was under-
+    # reporting site load by ~50% on balanced 240V loads. Fix: read 0x0232
+    # (Load Phase B active) separately and sum in aggregator.
+    Field(0x0210, 11, "load_active_phase_a",     1.0,  False, "W",  "power",    "measurement"),  # 0x021B
+    Field(0x0210, 12, "load_apparent_phase_a",   1.0,  False, "VA", "apparent_power","measurement"),  # 0x021C
     Field(0x0210, 15, "load_percent",            1.0,  False, "%",  None,       "measurement"),  # 0x021F
     Field(0x0210, 16, "temperature_dc_dc",       0.1,  False, "°C", "temperature","measurement"),
     Field(0x0210, 17, "temperature_dc_ac",       0.1,  False, "°C", "temperature","measurement"),
     Field(0x0210, 18, "temperature_transformer", 0.1,  False, "°C", "temperature","measurement"),
 
-    # pv_temps_l2 block 0x0223..0x0239
-    Field(0x0223, 5,  "pv1_voltage",             0.1,  False, "V",  "voltage",  "measurement"),   # 0x0228
-    Field(0x0223, 6,  "pv2_voltage",             0.1,  False, "V",  "voltage",  "measurement"),   # 0x0229
-    Field(0x0223, 9,  "ac_output_voltage_l2",    0.1,  False, "V",  "voltage",  "measurement"),   # 0x022C
-    Field(0x0223, 11, "ac_output_current_l2",    0.1,  False, "A",  "current",  "measurement"),   # 0x022E
-    # 0x0232 / 0x0234 are PV CURRENT in 0.01 A units (verified empirically 2026-05-20 via
-    # energy balance: PV(V*I) - load - battery_charge balances to within ~3% only when scale=0.01).
-    # PV power is COMPUTED as V x I in the aggregator, not read directly.
-    Field(0x0223, 15, "pv1_current",             0.01, False, "A",  "current",  "measurement"),   # 0x0232
-    Field(0x0223, 17, "pv2_current",             0.01, False, "A",  "current",  "measurement"),   # 0x0234
+    # L2 / phase B block 0x0223..0x0239 — corrected mapping per SRNE V1.96 PDF
+    # (2026-05-21). Previously this block was named "pv_temps_l2" because the
+    # bridge incorrectly interpreted offsets as PV V/I:
+    #   - 0x0228/0x0229 were called "pv1_voltage"/"pv2_voltage" — but they are
+    #     NOT in V1.96 spec. Values (~253V at night) appear to track
+    #     bus_voltage / 2 (internal HV DC rail), not PV.
+    #   - 0x0232/0x0234 were called "pv1_current"/"pv2_current" scale 0.01 —
+    #     but per spec they are Load Phase B active and apparent power in W/VA.
+    # The "verified empirically via energy balance within 3%" claim was the
+    # coincidental result of 4 simultaneous bugs that cancelled: load
+    # under-counted by 2x, battery sign inverted, "PV current" actually L2
+    # active W, "PV voltage" actually internal bus V. Real PV V/I/P live in
+    # block 0x0100 (PV1) and 0x010F (PV2) per spec.
+    Field(0x0223, 9,  "ac_output_voltage_l2",    0.1,  False, "V",  "voltage",  "measurement"),   # 0x022C inverter phase_B out V
+    Field(0x0223, 11, "ac_output_current_l2",    0.1,  False, "A",  "current",  "measurement"),   # 0x022E inverter phase_B inductive I
+    Field(0x0223, 13, "load_current_phase_b",    0.1,  False, "A",  "current",  "measurement"),   # 0x0230 Load Phase B current
+    Field(0x0223, 15, "load_active_phase_b",     1.0,  False, "W",  "power",    "measurement"),   # 0x0232 Load Phase B active power
+    Field(0x0223, 17, "load_apparent_phase_b",   1.0,  False, "VA", "apparent_power","measurement"),# 0x0234 Load Phase B apparent power
+
+    # PV2 block 0x010F..0x0111 — per V1.96 spec. Block name was "bms" in the
+    # BLOCKS list but the address range is PV2, not BMS. Renamed 2026-05-21.
+    Field(0x010F, 0,  "pv2_voltage",             0.1,  False, "V",  "voltage",  "measurement"),   # 0x010F
+    Field(0x010F, 1,  "pv2_current",             0.1,  False, "A",  "current",  "measurement"),   # 0x0110
+    Field(0x010F, 2,  "pv2_power",               1.0,  True,  "W",  "power",    "measurement"),   # 0x0111 (signed for safety)
 
     # device_info block 0x0014..0x001D — diagnostic, polled cold every 60 s.
     # Verified 2026-05-20 against SRNE V1.96 PDF (raw 818 -> "V8.18", etc.).
