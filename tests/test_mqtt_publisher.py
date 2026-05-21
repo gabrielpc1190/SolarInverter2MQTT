@@ -304,5 +304,7 @@ def test_energy_sensors_in_discovery(cfg, mock_client):
     assert payload["device_class"] == "energy"
     assert payload["state_class"] == "total_increasing"
     assert payload["unit_of_measurement"] == "kWh"
-    # Energy sensors are continuous: no force_update.
-    assert "force_update" not in payload
+    # Energy accumulators need force_update: total_increasing counters stay flat
+    # for long stretches (e.g. battery_energy_out while charging) and HA dedups
+    # identical values, making the entity look stale to the watchdog.
+    assert payload.get("force_update") is True
