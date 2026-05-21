@@ -20,7 +20,12 @@ def load_frame_from_hex(hex_path: Path, count: int, slave: int) -> ModbusFrame:
 
 
 def test_parse_battery_block_slave01():
-    """Real captured battery block: SOC=34%, V=52.8, I_raw=-146 (S16, discharging)."""
+    """Real captured battery block: SOC=34%, V=52.8, I_raw=-146 (S16).
+    Fixture captured during PV-active daytime; charge_state_code=1 ("PV
+    charging") confirms the bank WAS being charged. Per V1.96 firmware
+    convention, raw NEGATIVE register = charging (current flowing INTO bank).
+    Bridge applies scale -0.1 to flip into our convention (positive = charging).
+    So raw -146 → exposed +14.6 A charging."""
     frame = load_frame_from_hex(
         FIXTURES / "block_0100_count15_slave01_battery_day_pv_active.hex",
         count=15,
@@ -29,8 +34,8 @@ def test_parse_battery_block_slave01():
     parsed = parse_block(block_addr=0x0100, frame=frame)
     assert parsed.fields["battery_state_of_charge"] == 34.0
     assert parsed.fields["battery_voltage"] == 52.8
-    # S16: 65390 - 65536 = -146, x0.1 = -14.6 A (negative = discharging)
-    assert parsed.fields["battery_current"] == pytest.approx(-14.6, abs=0.001)
+    # S16: raw 65390 = -146; with scale -0.1 → +14.6 A (bridge: positive = charging)
+    assert parsed.fields["battery_current"] == pytest.approx(14.6, abs=0.001)
     assert parsed.fields["charge_state_code"] == 1.0
 
 
@@ -109,19 +114,22 @@ def test_parse_pv1_in_battery_block_slave01():
     assert "pv1_power" in parsed.fields
 
 
-def test_parse_signed_battery_current_negative():
-    """Battery current is S16; verify negative interpretation."""
-    # 0xFFE0 = -32 (S16), * 0.1 = -3.2 A
+def test_parse_signed_battery_current_negative_raw_becomes_positive_charging():
+    """Raw NEGATIVE register = charging per firmware convention.
+    Bridge flips sign via scale -0.1 to expose positive = charging.
+    raw 0xFFE0 = -32 (S16), x -0.1 → +3.2 A (charging)."""
     frame = ModbusFrame(slave=1, func=3, regs=[44, 521, 0xFFE0, *([0] * 12)])
     parsed = parse_block(block_addr=0x0100, frame=frame)
-    assert parsed.fields["battery_current"] == pytest.approx(-3.2, abs=0.01)
+    assert parsed.fields["battery_current"] == pytest.approx(3.2, abs=0.01)
 
 
-def test_parse_signed_battery_current_positive():
-    """Positive raw = charging per standard convention."""
+def test_parse_signed_battery_current_positive_raw_becomes_negative_discharging():
+    """Raw POSITIVE register = discharging per firmware convention.
+    Bridge flips sign via scale -0.1 to expose negative = discharging.
+    raw +200 x -0.1 → -20 A (discharging)."""
     frame = ModbusFrame(slave=1, func=3, regs=[80, 530, 200, *([0] * 12)])
     parsed = parse_block(block_addr=0x0100, frame=frame)
-    assert parsed.fields["battery_current"] == 20.0  # +20A charging
+    assert parsed.fields["battery_current"] == -20.0  # discharging
 
 
 def test_parse_wrong_register_count_raises():

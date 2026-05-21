@@ -64,9 +64,24 @@ FIELDS: list[Field] = [
     # battery block 0x0100..0x010E
     Field(0x0100, 0,  "battery_state_of_charge", 1.0,  False, "%",  "battery",  "measurement"),
     Field(0x0100, 1,  "battery_voltage",         0.1,  False, "V",  "voltage",  "measurement"),
-    # Sign convention STANDARD (positive = charging, negative = discharging).
-    # Cross-validated against SA's historical battery_power sensor empirically.
-    Field(0x0100, 2,  "battery_current",         0.1,  True,  "A",  "current",  "measurement"),
+    # Sign convention STANDARD as exposed by this bridge: positive = charging,
+    # negative = discharging. Matches BMS Panel S3 + CLAUDE.md gotcha #3.
+    #
+    # IMPORTANT: the inverter firmware (SRNE V1.96) reports the OPPOSITE
+    # convention in register 0x0102 — positive raw value when current FLOWS
+    # FROM battery TO inverter (i.e., discharging). Verified empirically
+    # 2026-05-21 against BMS: at night discharging 850W, raw register read
+    # +11A (would mean "charging" if interpreted as-is); during day charging
+    # 12 kW, raw read -240A. So we APPLY A SIGN FLIP via negative scale to
+    # transpose into the bridge's published convention.
+    #
+    # Previously this Field used scale +0.1 with comment "positive = charging"
+    # which contradicted empirical reality. The earlier "cross-validation
+    # against SA's historical battery_power" was performed during a brief
+    # charging moment and matched by coincidence (SA likely had its own sign
+    # quirks). Bug fixed 2026-05-21 after running daytime audit revealed
+    # bridge reporting -14kW while BMS reported +12kW with PV active.
+    Field(0x0100, 2,  "battery_current",         -0.1, True,  "A",  "current",  "measurement"),
     # PV1 — registers 0x0107..0x0109 per SRNE V1.96 spec. Direct V/I/P from
     # firmware MPPT measurement. Verified empirically 2026-05-21: at night
     # all three regs report 0 (matches reality, no sun).
