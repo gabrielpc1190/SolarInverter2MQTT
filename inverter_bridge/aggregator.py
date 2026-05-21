@@ -51,27 +51,15 @@ def aggregate_inverters(
         # SA convention: positive = charging
         out["battery_power"] = round(avg_v * total_i, 1)
 
-    # State block: load Phase A + Phase B + grid + temps + mode.
-    #
-    # CRITICAL topology note (verified empirically 2026-05-21 against BMS
-    # ground truth):
-    # In master/slave PARALLEL mode, both inverters report the SAME total
-    # AC-bus measurements — each one acts as a voltmeter/wattmeter on the
-    # shared bus, NOT as a meter of its own contribution. Confirmation:
-    #   1. inv1 phase_a = 479W, inv2 phase_a = 489W — values ~identical
-    #      (would be HALF each if measuring own contribution).
-    #   2. inv1 I_L1 = 4.4A, inv2 I_L1 = 4.4A — same total bus current.
-    #   3. Energy balance: AVG(per-inverter total) + overhead ≈ BMS discharge.
-    #      Summing yielded negative "overhead" — physically impossible.
-    #
-    # Therefore for AC-bus aggregates (load_power, grid_power, etc.) we
-    # AVERAGE per-inverter values. PV stays SUM because each inverter has
-    # independent MPPT strings physically separate.
+    # State block: load Phase A active/apparent + grid (Phase A) + temps + mode.
+    # NB: per V1.96 spec, register 0x021B is Load *Phase A* active power, NOT
+    # the L1+L2 sum (the previous comment was wrong, causing the bridge to
+    # under-report site load by ~50% on balanced 240V loads). Phase B active
+    # power comes from the separate phase_b block below; per-inverter
+    # `load_power` is the sum of both phases.
     inv1_state: ParsedBlock | None = None
-    phase_a_active: list[float] = []
-    phase_b_active: list[float] = []
-    phase_a_apparent: list[float] = []
-    phase_b_apparent: list[float] = []
+    site_load_active_total = 0.0
+    site_load_any = False
     for i, inv in enumerate(per_inverter, start=1):
         s = inv.get("state")
         if s is None:
@@ -79,34 +67,33 @@ def aggregate_inverters(
         if i == 1:
             inv1_state = s
         active_a = s.fields["load_active_phase_a"]
-        apparent_a = s.fields["load_apparent_phase_a"]
+        # Sum L1 + L2 active to get this inverter's TOTAL real load delivery.
         phase_b = inv.get("phase_b")
         active_b = phase_b.fields["load_active_phase_b"] if phase_b is not None else 0.0
-        apparent_b = (
-            phase_b.fields["load_apparent_phase_b"]
-            if phase_b is not None and "load_apparent_phase_b" in phase_b.fields
-            else 0.0
-        )
-        phase_a_active.append(active_a)
-        phase_b_active.append(active_b)
-        phase_a_apparent.append(apparent_a)
-        phase_b_apparent.append(apparent_b)
-        # Per-inverter sensors: this inverter's view of the bus (should equal
-        # the other inverter's view in parallel mode; deviation = current
-        # sharing issue worth alerting on).
-        out[f"inverter_{i}_load_power"] = round(active_a + active_b, 1)
+        total_active = active_a + active_b
+        out[f"inverter_{i}_load_power"] = round(total_active, 1)
         out[f"inverter_{i}_load_power_l1"] = round(active_a, 1)
         out[f"inverter_{i}_load_power_l2"] = round(active_b, 1)
+        site_load_active_total += total_active
+        site_load_any = True
+        # Apparent power: per-leg from registers (when both available).
+        apparent_a = s.fields["load_apparent_phase_a"]
         out[f"inverter_{i}_load_apparent_power_l1"] = round(apparent_a, 1)
-        out[f"inverter_{i}_load_apparent_power_l2"] = round(apparent_b, 1)
-        out[f"inverter_{i}_load_apparent_power"] = round(apparent_a + apparent_b, 1)
+        if phase_b is not None and "load_apparent_phase_b" in phase_b.fields:
+            apparent_b = phase_b.fields["load_apparent_phase_b"]
+            out[f"inverter_{i}_load_apparent_power_l2"] = round(apparent_b, 1)
+            out[f"inverter_{i}_load_apparent_power"] = round(apparent_a + apparent_b, 1)
+        else:
+            out[f"inverter_{i}_load_apparent_power"] = round(apparent_a, 1)
         out[f"inverter_{i}_load_percentage"] = s.fields["load_percent"]
         out[f"inverter_{i}_ac_output_frequency"] = s.fields["ac_output_frequency"]
         out[f"inverter_{i}_grid_frequency"] = s.fields["grid_frequency"]
+        # Grid: inverter only exposes Phase A. Keep single per-inverter sensor.
         out[f"inverter_{i}_grid_voltage"] = s.fields["grid_voltage_l1"]
         out[f"inverter_{i}_grid_power"] = round(
             s.fields["grid_voltage_l1"] * s.fields["grid_current_l1"], 1
         )
+        # Temperatures
         t_dc_dc = s.fields["temperature_dc_dc"]
         t_dc_ac = s.fields["temperature_dc_ac"]
         t_trans = s.fields["temperature_transformer"]
@@ -114,22 +101,20 @@ def aggregate_inverters(
         out[f"inverter_{i}_temperature_dc_dc"] = t_dc_dc
         out[f"inverter_{i}_temperature_dc_ac"] = t_dc_ac
         out[f"inverter_{i}_temperature_transformer"] = t_trans
+        # device_mode text
         code = int(s.fields["inverter_state_code"])
         out[f"inverter_{i}_device_mode"] = INVERTER_STATE_LOOKUP.get(
             code, f"unknown_code_{code}"
         )
         out[f"inverter_{i}_bus_voltage"] = s.fields["bus_voltage"]
+        # Combined L1+L2 AC output voltage (~240 V)
         if phase_b is not None and "ac_output_voltage_l2" in phase_b.fields:
             v_l1 = s.fields["ac_output_voltage_l1"]
             v_l2 = phase_b.fields["ac_output_voltage_l2"]
             out[f"inverter_{i}_ac_output_voltage"] = round(v_l1 + v_l2, 1)
-    if phase_a_active:
-        # Site = AVERAGE per-inverter views (parallel bus, each inverter
-        # reports total site value, not its own contribution).
-        avg_active_a = sum(phase_a_active) / len(phase_a_active)
-        avg_active_b = sum(phase_b_active) / len(phase_b_active)
-        out["load_power"] = round(avg_active_a + avg_active_b, 1)
-        # Site mode = inv1's mode (sync in split-phase parallel)
+    if site_load_any:
+        out["load_power"] = round(site_load_active_total, 1)
+        # Site-wide mode = inv1's mode (they sync in split-phase)
         if "inverter_1_device_mode" in out:
             out["mode"] = out["inverter_1_device_mode"]
 
