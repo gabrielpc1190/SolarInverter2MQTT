@@ -6,7 +6,7 @@ LCD polling its own slave, interspersed with our queries. So instead of
 assuming `1 request = 1 buffer = 1 response`, we treat the serial buffer as
 a stream and pull out frames with valid CRC.
 
-Measured 2026-05-20 on home:
+Measured empirically on our installation:
 - ttyUSB1 (inv1 slave 0x01): ~3 frames/sec of LCD chatter
 - ttyUSB0 (inv2 slave 0x02): ~0.7 frames/sec of LCD chatter
 - Bus reliability: 3.3% read fail rate on inv2, 16.7% on inv1.

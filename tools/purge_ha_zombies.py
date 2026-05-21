@@ -13,7 +13,8 @@ cross-references each entry with `/api/states` (REST) to learn the current
 state and `last_updated`, and removes entries that:
 
   * match one of the `--domain` entity_id prefixes (default: the
-    inverter-bridge / home families), AND
+    inverter-bridge / solar_assistant entity families — override with
+    `--domain` to match whatever your device slug became in HA), AND
   * have a current state of `unavailable` or `unknown`, AND
   * have a `last_updated` older than `--unavailable-min-age-s` seconds.
 
@@ -59,9 +60,12 @@ log = logging.getLogger("purge_ha_zombies")
 
 # --- Defaults ------------------------------------------------------------
 
+# NOTE: these defaults assume your inverter device in HA generated entities with
+# `gadi_inverters_` (the slug taken from the device name). Override via `--domain`
+# if your installation used a different device name (e.g. `solar_assistant_`).
 DEFAULT_DOMAINS: tuple[str, ...] = (
-    "sensor.gadi_inverters_",
-    "binary_sensor.gadi_inverters_",
+    "sensor.solar_assistant_",
+    "binary_sensor.solar_assistant_",
     "binary_sensor.inverter_bridge_",
 )
 

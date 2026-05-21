@@ -5,7 +5,7 @@ Designed to MATCH Solar Assistant's MQTT topology so existing HA entities
 requiring dashboard/automation changes.
 
 SA convention (verified 2026-05-20 by inspecting retained discovery payloads
-on the home broker before SA was disconnected):
+on our MQTT broker by inspecting retained discovery payloads before SA was disconnected):
 
 - Topic prefix: `solar_assistant`
 - Aggregated sensors: state at `solar_assistant/total/<key>/state`,
@@ -122,7 +122,7 @@ FORCE_UPDATE_KEY_SUFFIXES: tuple[str, ...] = (
     "charge_state",
     "load_percentage",
     "inverter_state_code",
-    # Grid sensors are always 0 in home's offgrid setup; force_update keeps them
+    # Grid sensors are always 0 in an offgrid setup; force_update keeps them
     # from going stale in HA (they'd otherwise appear `unavailable` after the
     # default 5 min staleness threshold).
     "grid_voltage",

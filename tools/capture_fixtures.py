@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-"""Capture binary Modbus responses from the home inverters.
+"""Capture binary Modbus responses from the connected inverters.
 
-Same script as Task 3 of the implementation plan. Run on the OPi.
+Run on the SBC that's wired to the inverters. Each captured `.hex` is a
+verbatim wire-format Modbus RTU response — feed into `tests/fixtures/` for
+golden tests of `parsers.py`.
 """
 
 from __future__ import annotations

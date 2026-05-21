@@ -1,11 +1,11 @@
 [project]
 name = "inverter-bridge"
 version = "0.1.0"
-description = "SRNE Modbus inverter -> MQTT bridge for home (replaces Solar Assistant)"
+description = "SRNE Modbus split-phase inverter -> MQTT bridge (Solar Assistant compatible)"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
-authors = [{ name = "Gabriel", email = "gabrielpc1190@gmail.com" }]
+authors = [{ name = "gabrielpc1190", email = "gabrielpc1190@users.noreply.github.com" }]
 dependencies = [
     "pyserial>=3.5",
     "paho-mqtt>=2.1.0",

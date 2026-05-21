@@ -20,7 +20,7 @@ def test_crc_modbus_read_request_slave1():
     assert crc16(req) == bytes([0x04, 0x32])
 
 
-# Real-world captures from home inverter (2026-05-20)
+# Real-world captures from a SunGoldPower split-phase inverter (2026-05-20)
 def test_crc_real_response_slave1_block_0100_count4():
     """Captured response body from /dev/ttyUSB1 slave=0x01 addr=0x0100 count=4."""
     body = bytes([0x01, 0x03, 0x08, 0x00, 0x2c, 0x02, 0x08, 0x00, 0xbb, 0x00, 0x00])

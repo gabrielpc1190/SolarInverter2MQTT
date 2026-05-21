@@ -1,16 +1,17 @@
 # inverter-bridge config example
-# Copy to /etc/inverter-bridge.yaml on the OPi and edit to taste.
+# Copy to /etc/inverter-bridge.yaml on the target SBC and edit.
 #
-# To find the correct by-path symlinks, on the OPi run:
+# To find the correct by-path symlinks for your USB ports, run:
 #   ls -la /dev/serial/by-path/
-# Map each inverter to its physical USB port.
+# Map each inverter to its physical USB port. The by-path mapping is stable
+# across reboots as long as you don't move cables between ports.
 
 inverters:
   - name: inv1
-    port: /dev/serial/by-path/platform-5311400.usb-usb-0:1:1.0-port0
+    port: /dev/serial/by-path/platform-<example-usb-id>-usb-0:1:1.0-port0
     slave: 0x01
   - name: inv2
-    port: /dev/serial/by-path/platform-xhci-hcd.1.auto-usb-0:1:1.0-port0
+    port: /dev/serial/by-path/platform-<example-usb-id>-usb-0:1:1.0-port0
     slave: 0x02
 
 polling:
@@ -18,19 +19,25 @@ polling:
   cold_interval_s: 60.0
   serial_timeout_s: 1.5
   inter_query_delay_s: 0.05
-  retry_attempts: 3       # inv1 has higher fail rate; retry-on-no-clean-reply
+  # If a bus is noisier (e.g. cable picks up EMI from nearby AC wiring),
+  # increase retry_attempts; each retry adds serial_timeout_s to the worst
+  # case for that block.
+  retry_attempts: 3
   retry_backoff_s: 0.1
 
 mqtt:
-  host: 192.0.2.10
+  host: 192.0.2.10           # your MQTT broker (e.g. Mosquitto on HA host)
   port: 1883
   username: inverter_bridge
   password_file: /etc/inverter-bridge.secrets
   client_id: inverter_bridge
-  # IMPORTANT: topic_prefix must match what Solar Assistant used historically
-  # ("solar_assistant"). The daemon publishes with SA's unique_id format
-  # (total_*, inverter_N_*) so existing HA entities resume updating without
-  # any dashboard/automation changes. See spec §5.8 for the full mapping.
+  # IMPORTANT: topic_prefix matches what Solar Assistant used so existing HA
+  # entities keep their entity_id (unique_id matches) without any dashboard or
+  # automation changes. The daemon publishes:
+  #   solar_assistant/total/<key>/state            (aggregates)
+  #   solar_assistant/inverter_<N>/<key>/state     (per-inverter)
+  #   solar_assistant/_meta/<diagnostic>/state     (poll_duration_ms etc.)
+  #   solar_assistant/availability                 (online/offline retained)
   topic_prefix: solar_assistant
   discovery_prefix: homeassistant
   retain_discovery: true

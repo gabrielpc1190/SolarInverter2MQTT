@@ -65,7 +65,10 @@ CAT_UNRELATED = "UNRELATED"
 # `_<digit>+` groups appended.
 COLLISION_SUFFIX_RE = re.compile(r"(?:_\d+)+$")
 
-# v1 deploy prefix (wrong / not SA-compatible)
+# v1 deploy prefix marker — change this to whatever wrong unique_id prefix your
+# earlier deploy iteration left behind. In our reference deploy, the first
+# iteration used `gadi_inverters_*` unique_ids before switching to SA-compatible
+# `total_*` / `inverter_N_*`; orphans from that iteration get categorized here.
 ORPHAN_V1_PREFIX = "gadi_inverters_"
 
 # Topic prefix the current daemon publishes under (SA convention)
@@ -321,8 +324,13 @@ def capture_retained(
     rc_holder: dict[str, int] = {"connect_rc": -1}
 
     def on_connect(client, _userdata, _flags, rc, _properties=None):
-        rc_holder["connect_rc"] = int(rc)
-        if rc == 0:
+        # paho-mqtt v2 passes a ReasonCode; .value is the numeric code (0 = success).
+        try:
+            rc_int = rc.value  # type: ignore[union-attr]
+        except AttributeError:
+            rc_int = int(rc)
+        rc_holder["connect_rc"] = rc_int
+        if rc_int == 0:
             client.subscribe("homeassistant/sensor/+/config", qos=0)
             client.subscribe("homeassistant/binary_sensor/+/config", qos=0)
         connected_event.set()
@@ -407,7 +415,10 @@ def clear_retained(
     rc_holder: dict[str, int] = {"connect_rc": -1}
 
     def on_connect(_client, _userdata, _flags, rc, _properties=None):
-        rc_holder["connect_rc"] = int(rc)
+        try:
+            rc_holder["connect_rc"] = rc.value  # type: ignore[union-attr]
+        except AttributeError:
+            rc_holder["connect_rc"] = int(rc)
         connected_event.set()
 
     client = mqtt.Client(

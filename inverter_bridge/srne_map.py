@@ -65,7 +65,7 @@ FIELDS: list[Field] = [
     Field(0x0100, 0,  "battery_state_of_charge", 1.0,  False, "%",  "battery",  "measurement"),
     Field(0x0100, 1,  "battery_voltage",         0.1,  False, "V",  "voltage",  "measurement"),
     # Sign convention STANDARD (positive = charging, negative = discharging).
-    # Cross-validated against SA's historical sensor.gadi_inverters_battery_power 2026-05-20.
+    # Cross-validated against SA's historical battery_power sensor empirically.
     Field(0x0100, 2,  "battery_current",         0.1,  True,  "A",  "current",  "measurement"),
     Field(0x0100, 11, "charge_state_code",       1.0,  False, "",   None,       None),  # 0x010B
 
@@ -120,7 +120,7 @@ INVERTER_STATE_LOOKUP: dict[int, str] = {
 
 
 # Charge state code lookup (0x010B). Per spec §5.11.
-# Only `1` observed in home (PV mid-day); rest inferred.
+# Only `1` observed empirically (PV mid-day); rest inferred.
 CHARGE_STATE_LOOKUP: dict[int, str] = {
     0: "Idle",
     1: "PV charging",

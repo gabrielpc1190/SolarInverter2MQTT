@@ -81,15 +81,19 @@ DEFAULT_WS_TIMEOUT_S = 10.0
 # UA strings get challenged. `curl/8.0` is allow-listed for us.
 USER_AGENT = "curl/8.0"
 
-# The audit-F7 rename targets inv1 and inv2 entities under the
-# inverter-bridge family.
+# The audit-F7 rename targets per-inverter entities whose entity_id was
+# suffixed by HA with a stray `_3` during a deploy iteration. The prefix
+# below assumes the HA device for the inverters generated the entity_id
+# slug `<device_slug>_inverter_N_`; in our reference deploy that slug was
+# `gadi_inverters_`. Adjust both `AUDIT_F7_PREFIXES` and the regex below
+# if your installation's slug differs.
 AUDIT_F7_PREFIXES: tuple[str, ...] = (
     "sensor.gadi_inverters_inverter_1_",
     "sensor.gadi_inverters_inverter_2_",
 )
 
-# Matches a `sensor.gadi_inverters_inverter_<n>_<base>_3` entity_id.
-# The trailing `_3` is the HA-appended suffix we want to strip.
+# Matches a `sensor.<device_slug>_inverter_<n>_<base>_3` entity_id.
+# The trailing `_3` is the HA-appended collision suffix we want to strip.
 _AUDIT_F7_ENTITY_RE = re.compile(
     r"^sensor\.gadi_inverters_inverter_(?P<inv>[12])_(?P<base>.+)_3$"
 )

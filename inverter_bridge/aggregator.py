@@ -153,13 +153,13 @@ def aggregate_inverters(
         out[f"inverter_{i}_grid_voltage_3"] = 0.0
         out[f"inverter_{i}_pv_power_3"] = 0.0
 
-    # F-9 fix: rated installed battery capacity (kWh).
-    # SA historically published `sensor.gadi_inverters_capacity = 72.6` as a
-    # static value from the inverter config block 0xE116. We hardcode it here
-    # for entity-name continuity. The real DEGRADED bank capacity (57 kWh)
-    # lives in HA as `input_number.capacidad_bateria_kwh` and is the
-    # authoritative figure for energy automations — `capacity` published here
-    # is only kept for backwards compat with the existing SA sensor name.
+    # Rated installed battery capacity (kWh).
+    # SA historically published this as a static value derived from the
+    # inverter config block 0xE116. The exact register offset hasn't been
+    # confirmed, so we publish a hardcoded value here for SA-compatibility
+    # of the entity name. Override in your fork if your installation differs;
+    # the real (degraded) bank capacity should live in HA as an
+    # `input_number.*` helper that your automations actually consume.
     out["capacity"] = 72.6
 
     return out
