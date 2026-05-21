@@ -183,6 +183,48 @@ def test_pv_power_computed_from_voltage_and_current():
     assert out["pv_power"] == 780.0
 
 
+def test_pv_zeroed_when_charge_state_idle():
+    """Night: inverter's PV V/I registers report fake values (pv_voltage tracks
+    bus_voltage/2, pv_current is a stray reading). When charge_state_code = 0
+    (Idle), the aggregator must zero PV power so dashboards and solar_excess
+    sensors don't see phantom generation."""
+    inv1 = {
+        "battery": _make_battery(soc=46, v=52.4, i=11.0, charge_state=0),  # 0 = Idle
+        "state": _make_state(active_p=362),
+        "pv_temps_l2": _make_pv(pv1_w=520, pv2_w=260),  # fake-looking data on the wire
+    }
+    out = aggregate_inverters([inv1])
+    assert out["inverter_1_pv_power"] == 0.0
+    assert out["inverter_1_pv_power_mppt1"] == 0.0
+    assert out["inverter_1_pv_power_mppt2"] == 0.0
+    assert out["inverter_1_pv_current"] == 0.0
+    assert out["inverter_1_pv_voltage_mppt1"] == 0.0
+    assert out["pv_power"] == 0.0
+
+
+def test_pv_zeroed_when_charge_state_grid():
+    """charge_state_code = 2 (Grid charging) also implies PV is not active."""
+    inv1 = {
+        "battery": _make_battery(soc=30, v=52.0, i=20.0, charge_state=2),  # 2 = Grid
+        "state": _make_state(active_p=200),
+        "pv_temps_l2": _make_pv(pv1_w=400, pv2_w=300),
+    }
+    out = aggregate_inverters([inv1])
+    assert out["inverter_1_pv_power"] == 0.0
+    assert out["pv_power"] == 0.0
+
+
+def test_pv_active_when_charge_state_float():
+    """charge_state_code = 3 (Float) is PV-driven; PV registers ARE trustworthy."""
+    inv1 = {
+        "battery": _make_battery(soc=99, v=54.0, i=2.0, charge_state=3),  # 3 = Float
+        "state": _make_state(active_p=200),
+        "pv_temps_l2": _make_pv(pv1_w=300, pv2_w=200),
+    }
+    out = aggregate_inverters([inv1])
+    assert out["inverter_1_pv_power"] == 500.0
+
+
 def test_pv_current_clamped_when_voltage_zero():
     inv1 = {
         "battery": _make_battery(soc=50, v=52.0, i=0.0),

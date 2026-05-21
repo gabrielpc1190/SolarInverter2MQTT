@@ -109,6 +109,14 @@ def aggregate_inverters(
     # PV + L2 (split-phase) + per-phase L2 apparent
     # Note: PV1/PV2 are stored as CURRENTS (A) in the inverter registers; we compute
     # power as V x I. Confirmed empirically 2026-05-20 (energy balance).
+    #
+    # Night-time gate (added 2026-05-20): when the inverter is NOT charging from
+    # PV (charge_state_code ∉ {1=PV, 3=Float}), the pv_voltage / pv_current
+    # registers report fake values (pv_voltage tracks bus_voltage/2, pv_current
+    # is a stray reading from the boost converter, not a real solar measurement).
+    # Without this gate the bridge reports ~1500-1700 W of phantom PV at night,
+    # which breaks energy balance and trips `binary_sensor.solar_excess_stable`.
+    PV_ACTIVE_CHARGE_CODES = {1, 3}  # 1 = PV charging, 3 = Float (PV-driven)
     pv_total = 0.0
     pv_any = False
     for i, inv in enumerate(per_inverter, start=1):
@@ -116,10 +124,14 @@ def aggregate_inverters(
         if pv is None:
             continue
         pv_any = True
-        pv1_v = pv.fields["pv1_voltage"]
-        pv2_v = pv.fields["pv2_voltage"]
-        pv1_i = pv.fields["pv1_current"]
-        pv2_i = pv.fields["pv2_current"]
+        # Gate from battery block's charge_state_code; default to inactive if missing.
+        b = inv.get("battery")
+        cs_code = int(b.fields.get("charge_state_code", 0)) if b is not None else 0
+        pv_active = cs_code in PV_ACTIVE_CHARGE_CODES
+        pv1_v = pv.fields["pv1_voltage"] if pv_active else 0.0
+        pv2_v = pv.fields["pv2_voltage"] if pv_active else 0.0
+        pv1_i = pv.fields["pv1_current"] if pv_active else 0.0
+        pv2_i = pv.fields["pv2_current"] if pv_active else 0.0
         p1 = round(pv1_v * pv1_i, 1)  # PV1 power = V x I
         p2 = round(pv2_v * pv2_i, 1)
         v_l2 = pv.fields["ac_output_voltage_l2"]
