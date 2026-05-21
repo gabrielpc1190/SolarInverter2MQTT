@@ -106,7 +106,7 @@ def aggregate_inverters(
 
     # PV + L2 (split-phase) + per-phase L2 apparent
     # Note: PV1/PV2 are stored as CURRENTS (A) in the inverter registers; we compute
-    # power as V × I. Confirmed empirically 2026-05-20 (energy balance).
+    # power as V x I. Confirmed empirically 2026-05-20 (energy balance).
     pv_total = 0.0
     pv_any = False
     for i, inv in enumerate(per_inverter, start=1):
@@ -118,7 +118,7 @@ def aggregate_inverters(
         pv2_v = pv.fields["pv2_voltage"]
         pv1_i = pv.fields["pv1_current"]
         pv2_i = pv.fields["pv2_current"]
-        p1 = round(pv1_v * pv1_i, 1)  # PV1 power = V × I
+        p1 = round(pv1_v * pv1_i, 1)  # PV1 power = V x I
         p2 = round(pv2_v * pv2_i, 1)
         v_l2 = pv.fields["ac_output_voltage_l2"]
         i_l2 = pv.fields["ac_output_current_l2"]

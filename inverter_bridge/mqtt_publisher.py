@@ -201,11 +201,11 @@ def _needs_force_update(key: str) -> bool:
     """
     if key.startswith("_meta/"):
         return True
-    for suffix in FORCE_UPDATE_KEY_SUFFIXES:
-        # Exact match for aggregate keys, or `inverter_N_<suffix>` for per-inverter.
-        if key == suffix or key.endswith(f"_{suffix}"):
-            return True
-    return False
+    # Exact match for aggregate keys, or `inverter_N_<suffix>` for per-inverter.
+    return any(
+        key == suffix or key.endswith(f"_{suffix}")
+        for suffix in FORCE_UPDATE_KEY_SUFFIXES
+    )
 
 
 class MqttPublisher:

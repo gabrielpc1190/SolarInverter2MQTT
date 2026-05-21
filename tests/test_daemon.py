@@ -1,5 +1,6 @@
 """Tests for the daemon main loop using injected fakes for serial + MQTT."""
 
+import contextlib
 import threading
 import time
 from unittest.mock import MagicMock
@@ -84,8 +85,6 @@ def test_hot_cycle_publishes_aggregated_values(cfg):
         integrator=_make_fake_integrator(),
     )
     d.run_one_hot_cycle()
-    # Verify publisher.publish_value was called for key sensors
-    keys_published = [c.args[0] for c in fake_pub.publish_value.call_args_list]
     # Aggregator outputs come via publish_values, not publish_value:
     pv_calls = fake_pub.publish_values.call_args_list
     assert pv_calls, "expected at least one publish_values call (aggregator output)"
@@ -144,8 +143,6 @@ def test_timeout_marks_inverter_offline_after_3_consecutive(cfg):
 
 def test_mixed_success_one_inverter_offline(cfg):
     """If only one inverter responds, daemon publishes what it has + marks the other offline (after 3 cycles)."""
-    call_count = [0]
-
     def query(slave, addr, count):
         if slave == 2:
             raise TimeoutError("inv2 dead")
@@ -380,10 +377,8 @@ def test_hot_cycle_thread_safety_concurrent_fails(cfg):
         # First block of each cycle: sync the two threads so they hit the
         # fail-count increment as close in time as possible, exposing any race.
         if addr == 0x0100:
-            try:
+            with contextlib.suppress(threading.BrokenBarrierError):
                 barrier.wait(timeout=2.0)
-            except threading.BrokenBarrierError:
-                pass
         raise TimeoutError("simulated bus failure")
 
     serial_factory = _make_serial_factory(failing_query)

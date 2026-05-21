@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -52,7 +52,7 @@ DEFAULT_DOMAINS = (
 )
 
 # A fixed "now" so the tests are deterministic regardless of clock.
-NOW = datetime(2026, 5, 20, 12, 0, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 5, 20, 12, 0, 0, tzinfo=UTC)
 
 
 def _entry(entity_id: str, *, unique_id: str = "", platform: str = "mqtt"):
@@ -65,11 +65,9 @@ def _entry(entity_id: str, *, unique_id: str = "", platform: str = "mqtt"):
 
 
 def _state(entity_id: str, *, state: str, age_s: float | None):
-    last_updated: datetime | None
-    if age_s is None:
-        last_updated = None
-    else:
-        last_updated = NOW - timedelta(seconds=age_s)
+    last_updated: datetime | None = (
+        None if age_s is None else NOW - timedelta(seconds=age_s)
+    )
     return purge.StateRecord(
         entity_id=entity_id,
         state=state,

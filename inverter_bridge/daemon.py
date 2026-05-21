@@ -14,7 +14,8 @@ import logging
 import threading
 import time
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from pathlib import Path
 
 from .aggregator import aggregate_inverters
@@ -148,10 +149,11 @@ class Daemon:
         # Integrate energy (kWh) from instantaneous power readings. First cycle
         # has no elapsed delta yet, so dt = 0 (no accumulation that cycle).
         now = time.monotonic()
-        if self._last_hot_cycle_monotonic is None:
-            elapsed_s = 0.0
-        else:
-            elapsed_s = max(0.0, now - self._last_hot_cycle_monotonic)
+        elapsed_s = (
+            0.0
+            if self._last_hot_cycle_monotonic is None
+            else max(0.0, now - self._last_hot_cycle_monotonic)
+        )
         energy_values = self.integrator.update(
             aggregated=aggregated, elapsed_s=elapsed_s
         )

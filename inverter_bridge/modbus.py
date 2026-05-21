@@ -7,6 +7,7 @@ parsing), rather than depending on pymodbus. Total surface: ~80 lines.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import ClassVar
 
 from .crc import crc16
 
@@ -26,7 +27,7 @@ class ModbusFrame:
 class ModbusException(Exception):
     """Raised when slave returns an exception response (fc | 0x80)."""
 
-    EXCODES: dict[int, str] = {
+    EXCODES: ClassVar[dict[int, str]] = {
         0x01: "illegal_function",
         0x02: "illegal_data_address",
         0x03: "illegal_data_value",

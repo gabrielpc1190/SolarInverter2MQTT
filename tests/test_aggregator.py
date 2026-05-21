@@ -48,7 +48,7 @@ def _make_state(active_p: float, temp_max: float = 40.0) -> ParsedBlock:
 
 def _make_pv(pv1_w: float, pv2_w: float) -> ParsedBlock:
     """Build a PV block fixture; convert input watts to the underlying current
-    (registers store I, aggregator computes P = V × I with V = 260)."""
+    (registers store I, aggregator computes P = V x I with V = 260)."""
     return ParsedBlock(
         block_addr=0x0223,
         block_name="pv_temps_l2",
@@ -166,7 +166,7 @@ def test_missing_state_block_gracefully_degraded():
 
 
 def test_pv_power_computed_from_voltage_and_current():
-    """PV power = V × I (registers store current; we compute power)."""
+    """PV power = V x I (registers store current; we compute power)."""
     inv1 = {
         "battery": _make_battery(soc=50, v=52.0, i=0.0),
         "state": _make_state(active_p=500),
@@ -176,7 +176,7 @@ def test_pv_power_computed_from_voltage_and_current():
     # _make_pv stored pv1_current = 520/260 = 2.0 A, pv2_current = 260/260 = 1.0 A
     assert out["inverter_1_pv_current_1"] == 2.0
     assert out["inverter_1_pv_current_2"] == 1.0
-    # Aggregator computes power from V × I: 260 × 2 = 520W, 260 × 1 = 260W
+    # Aggregator computes power from V x I: 260 x 2 = 520W, 260 x 1 = 260W
     assert out["inverter_1_pv_power_1"] == 520.0
     assert out["inverter_1_pv_power_2"] == 260.0
     assert out["inverter_1_pv_power"] == 780.0
