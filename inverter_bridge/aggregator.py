@@ -1,12 +1,14 @@
-"""Aggregate per-inverter ParsedBlock dicts into Solar Assistant-compatible sensors.
+"""Aggregate per-inverter ParsedBlock dicts into per-inverter + total sensors.
 
-Output keys follow SA's convention so that the MQTT publisher can map them to
-the right topic + unique_id (see mqtt_publisher.py):
+Output keys follow an explicit suffix convention so they aren't ambiguous:
 
 - Aggregated (whole site): `battery_voltage`, `pv_power`, `load_power`, etc.
 - Per-inverter: `inverter_<N>_<key>`.
+- AC split-phase suffix: `_l1` / `_l2` (e.g. `load_power_l1`, `load_power_l2`).
+- PV string suffix: `_mppt1` / `_mppt2` (e.g. `pv_voltage_mppt1`).
 
-NO `_2` suffix on keys (that was an HA-side artifact, not part of SA's wire format).
+The earlier `_1` / `_2` suffix scheme was ambiguous (meant phase for AC and
+string for PV) and got fully replaced 2026-05-20.
 """
 
 from __future__ import annotations
@@ -65,14 +67,14 @@ def aggregate_inverters(
         out[f"inverter_{i}_load_percentage"] = s.fields["load_percent"]
         out[f"inverter_{i}_ac_output_frequency"] = s.fields["ac_output_frequency"]
         out[f"inverter_{i}_grid_frequency"] = s.fields["grid_frequency"]
-        out[f"inverter_{i}_grid_voltage_1"] = s.fields["grid_voltage_l1"]
-        # Grid power per phase (offgrid: always 0; here for SA compat)
-        out[f"inverter_{i}_grid_power_1"] = round(
+        # Grid: inverter only exposes the L1 phase reading, so we publish a
+        # single per-inverter `grid_voltage` and `grid_power` (no phase suffix).
+        out[f"inverter_{i}_grid_voltage"] = s.fields["grid_voltage_l1"]
+        out[f"inverter_{i}_grid_power"] = round(
             s.fields["grid_voltage_l1"] * s.fields["grid_current_l1"], 1
         )
-        out[f"inverter_{i}_grid_power"] = out[f"inverter_{i}_grid_power_1"]  # sum across phases = L1 only here
-        # Per-phase L1 apparent (V_L1 * I_L1)
-        out[f"inverter_{i}_load_power_1"] = round(
+        # AC output per phase (V_phase * I_phase)
+        out[f"inverter_{i}_load_power_l1"] = round(
             s.fields["ac_output_voltage_l1"] * s.fields["ac_output_current_l1"], 1
         )
         # Temperatures
@@ -123,17 +125,15 @@ def aggregate_inverters(
         v_l2 = pv.fields["ac_output_voltage_l2"]
         i_l2 = pv.fields["ac_output_current_l2"]
         pv_total += p1 + p2
-        out[f"inverter_{i}_pv1_voltage"] = pv1_v
-        out[f"inverter_{i}_pv2_voltage"] = pv2_v
-        out[f"inverter_{i}_pv_voltage_1"] = pv1_v
-        out[f"inverter_{i}_pv_voltage_2"] = pv2_v
-        out[f"inverter_{i}_pv_current_1"] = pv1_i
-        out[f"inverter_{i}_pv_current_2"] = pv2_i
+        out[f"inverter_{i}_pv_voltage_mppt1"] = pv1_v
+        out[f"inverter_{i}_pv_voltage_mppt2"] = pv2_v
+        out[f"inverter_{i}_pv_current_mppt1"] = pv1_i
+        out[f"inverter_{i}_pv_current_mppt2"] = pv2_i
         out[f"inverter_{i}_pv_current"] = round(pv1_i + pv2_i, 2)
-        out[f"inverter_{i}_pv_power_1"] = p1
-        out[f"inverter_{i}_pv_power_2"] = p2
+        out[f"inverter_{i}_pv_power_mppt1"] = p1
+        out[f"inverter_{i}_pv_power_mppt2"] = p2
         out[f"inverter_{i}_pv_power"] = round(p1 + p2, 1)
-        out[f"inverter_{i}_load_power_2"] = round(v_l2 * i_l2, 1)
+        out[f"inverter_{i}_load_power_l2"] = round(v_l2 * i_l2, 1)
         # Combined L1+L2 AC output voltage (SA shows ~240 V)
         s = inv.get("state")
         if s is not None:
@@ -141,17 +141,6 @@ def aggregate_inverters(
             out[f"inverter_{i}_ac_output_voltage"] = round(v_l1 + v_l2, 1)
     if pv_any:
         out["pv_power"] = round(pv_total, 1)
-
-    # F-7 fix: split-phase system has only L1+L2. Solar Assistant historically
-    # exposed `_3` (third-phase) sensors as compat-zero placeholders. We publish
-    # them explicitly as 0.0 (rather than omitting them) so the existing HA
-    # entities keep getting fresh updates (force_update: true bumps last_updated
-    # even when value is unchanged), instead of going stale.
-    for i in range(1, len(per_inverter) + 1):
-        out[f"inverter_{i}_load_power_3"] = 0.0
-        out[f"inverter_{i}_grid_power_3"] = 0.0
-        out[f"inverter_{i}_grid_voltage_3"] = 0.0
-        out[f"inverter_{i}_pv_power_3"] = 0.0
 
     # Rated installed battery capacity (kWh).
     # SA historically published this as a static value derived from the

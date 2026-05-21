@@ -45,7 +45,7 @@ def test_key_to_topic_path_aggregate():
 def test_key_to_topic_path_per_inverter():
     assert _key_to_topic_path("inverter_1_pv_power") == "inverter_1/pv_power"
     assert _key_to_topic_path("inverter_2_battery_current") == "inverter_2/battery_current"
-    assert _key_to_topic_path("inverter_1_pv_voltage_1") == "inverter_1/pv_voltage_1"
+    assert _key_to_topic_path("inverter_1_pv_voltage_mppt1") == "inverter_1/pv_voltage_mppt1"
 
 
 def test_key_to_unique_id_aggregate():

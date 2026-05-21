@@ -207,13 +207,16 @@ def test_orphan_collision_binary(spec):
     assert cleanup.categorize(d, spec) == cleanup.CAT_ORPHAN_COLLISION
 
 
-def test_canonical_with_trailing_digits_not_treated_as_collision(spec):
-    """Some canonical uids legitimately end in `_1`, `_2`, `_3` (e.g.
-    `inverter_1_pv_power_1`). Those must stay CANONICAL."""
-    for uid in ("inverter_1_pv_power_1",
-                "inverter_1_pv_power_2",
-                "inverter_2_grid_voltage_1",
-                "inverter_2_load_power_2"):
+def test_canonical_l1_l2_mppt_suffixes_not_treated_as_collision(spec):
+    """Canonical uids ending in `_l1`/`_l2`/`_mppt1`/`_mppt2` (the new explicit
+    phase / string suffix scheme) must stay CANONICAL. Only trailing `_N` or
+    `_N_M` digit-only suffixes are HA collision markers."""
+    for uid in ("inverter_1_load_power_l1",
+                "inverter_1_load_power_l2",
+                "inverter_1_pv_voltage_mppt1",
+                "inverter_1_pv_voltage_mppt2",
+                "inverter_2_pv_power_mppt1",
+                "inverter_2_pv_current_mppt2"):
         d = _make_sensor(uid)
         assert cleanup.categorize(d, spec) == cleanup.CAT_CANONICAL, uid
 

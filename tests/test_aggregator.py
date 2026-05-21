@@ -86,9 +86,9 @@ def test_aggregate_uses_sa_keys_without_suffix():
     assert "pv_power" in out
     assert "grid_voltage" in out
     assert "grid_frequency" in out
-    # No _2 suffixes
-    assert "battery_state_of_charge_2" not in out
-    assert "load_power_2" not in out
+    # Per-phase load_power_l1/l2 are per-inverter only, never aggregate
+    assert "load_power_l1" not in out
+    assert "load_power_l2" not in out
 
 
 def test_battery_power_positive_when_charging():
@@ -174,11 +174,11 @@ def test_pv_power_computed_from_voltage_and_current():
     }
     out = aggregate_inverters([inv1])
     # _make_pv stored pv1_current = 520/260 = 2.0 A, pv2_current = 260/260 = 1.0 A
-    assert out["inverter_1_pv_current_1"] == 2.0
-    assert out["inverter_1_pv_current_2"] == 1.0
+    assert out["inverter_1_pv_current_mppt1"] == 2.0
+    assert out["inverter_1_pv_current_mppt2"] == 1.0
     # Aggregator computes power from V x I: 260 x 2 = 520W, 260 x 1 = 260W
-    assert out["inverter_1_pv_power_1"] == 520.0
-    assert out["inverter_1_pv_power_2"] == 260.0
+    assert out["inverter_1_pv_power_mppt1"] == 520.0
+    assert out["inverter_1_pv_power_mppt2"] == 260.0
     assert out["inverter_1_pv_power"] == 780.0
     assert out["pv_power"] == 780.0
 
@@ -204,8 +204,8 @@ def test_pv_current_clamped_when_voltage_zero():
     )
     inv1["pv_temps_l2"] = pv
     out = aggregate_inverters([inv1])
-    assert out["inverter_1_pv_current_1"] == 0.0
-    assert out["inverter_1_pv_current_2"] == 0.0
+    assert out["inverter_1_pv_current_mppt1"] == 0.0
+    assert out["inverter_1_pv_current_mppt2"] == 0.0
 
 
 def test_ac_output_voltage_is_split_phase_sum():
@@ -218,41 +218,18 @@ def test_ac_output_voltage_is_split_phase_sum():
     assert out["inverter_1_ac_output_voltage"] == 240.0
 
 
-def test_l3_phase_keys_always_zero():
-    """F-7: split-phase systems only have L1+L2. SA historically published
-    `_3` (third-phase) sensors; we keep them present but explicitly = 0.0
-    so the entities stay fresh instead of going stale/unavailable."""
+def test_no_phantom_third_phase_keys():
+    """Split-phase systems only have L1+L2. The aggregator must NOT emit
+    `_3`-suffixed phantom-zero keys (removed 2026-05-20 along with the SA
+    compat naming)."""
     inv1 = {
         "battery": _make_battery(soc=44, v=52.5, i=10.0),
         "state": _make_state(active_p=500, temp_max=45.0),
         "pv_temps_l2": _make_pv(pv1_w=300, pv2_w=400),
     }
-    inv2 = {
-        "battery": _make_battery(soc=44, v=52.5, i=12.0),
-        "state": _make_state(active_p=600, temp_max=48.0),
-        "pv_temps_l2": _make_pv(pv1_w=350, pv2_w=380),
-    }
-    out = aggregate_inverters([inv1, inv2])
-    for n in (1, 2):
-        for key in (
-            f"inverter_{n}_load_power_3",
-            f"inverter_{n}_grid_power_3",
-            f"inverter_{n}_grid_voltage_3",
-            f"inverter_{n}_pv_power_3",
-        ):
-            assert key in out, f"missing required compat-zero key: {key}"
-            assert out[key] == 0.0, f"{key} must be 0.0 in split-phase, got {out[key]!r}"
-
-
-def test_l3_phase_keys_zero_even_when_battery_only():
-    """L3 compat-zero keys must be published even on a single-inverter site
-    or with missing PV/state blocks."""
-    inv1 = {"battery": _make_battery(soc=60, v=52.0, i=10.0)}
     out = aggregate_inverters([inv1])
-    assert out["inverter_1_load_power_3"] == 0.0
-    assert out["inverter_1_grid_power_3"] == 0.0
-    assert out["inverter_1_grid_voltage_3"] == 0.0
-    assert out["inverter_1_pv_power_3"] == 0.0
+    forbidden = [k for k in out if k.endswith("_3")]
+    assert forbidden == [], f"phantom _3 keys present: {forbidden}"
 
 
 def test_capacity_always_published():
