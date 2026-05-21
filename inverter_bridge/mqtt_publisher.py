@@ -56,6 +56,7 @@ AGGREGATE_SENSORS: dict[str, tuple[str, str | None, str | None]] = {
     "grid_voltage":             ("V",   "voltage",       "measurement"),
     "grid_frequency":           ("Hz",  "frequency",     "measurement"),
     "mode":                     ("",    None,            None),
+    "capacity":                 ("kWh", "energy",        None),
 }
 
 # Per-inverter sensors (without the `inverter_N_` prefix; that is added at publish time).
