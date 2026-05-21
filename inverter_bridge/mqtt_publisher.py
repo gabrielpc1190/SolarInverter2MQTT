@@ -56,7 +56,8 @@ AGGREGATE_SENSORS: dict[str, tuple[str, str | None, str | None]] = {
     "grid_voltage":             ("V",   "voltage",       "measurement"),
     "grid_frequency":           ("Hz",  "frequency",     "measurement"),
     "mode":                     ("",    None,            None),
-    "capacity":                 ("kWh", "energy",        None),
+    # `capacity` (rated battery kWh) intentionally absent — see aggregator.py
+    # comment block. Was a static SA-era setting, not a measurement.
     # Daily-stat sums across inverters (cold-cycle published, from 0xF02C).
     "pv_energy_today":          ("kWh", "energy",        "total_increasing"),
     "load_energy_today":        ("kWh", "energy",        "total_increasing"),

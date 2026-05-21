@@ -306,25 +306,20 @@ def test_no_phantom_third_phase_keys():
     assert forbidden == [], f"phantom _3 keys present: {forbidden}"
 
 
-def test_capacity_always_published():
-    """F-9: `capacity` (kWh) is always published, hardcoded to the rated
-    installed value (72.6 kWh from the inverter spec) for entity-name
-    continuity with the historical SA sensor."""
+def test_capacity_is_not_published():
+    """Retirado 2026-05-20: `capacity` era un static config setting de SA
+    (hardcoded 72.6 kWh, no medición), generaba warnings de HA Statistics
+    por falta de state_class, y la autoridad real vive HA-side en
+    `input_number.capacidad_bateria_kwh`. Aggregator no debe emitirlo."""
     inv1 = {
         "battery": _make_battery(soc=44, v=52.5, i=10.0),
         "state": _make_state(active_p=500),
         "pv_temps_l2": _make_pv(pv1_w=300, pv2_w=400),
     }
     out = aggregate_inverters([inv1])
-    assert "capacity" in out
-    assert out["capacity"] == 72.6
-
-
-def test_capacity_published_even_without_battery_block():
-    """`capacity` is a static/configured value; should publish even if all
-    block reads fail this cycle."""
-    out = aggregate_inverters([{}])
-    assert out["capacity"] == 72.6
+    assert "capacity" not in out
+    # Defense in depth: even with all blocks empty, no capacity key.
+    assert "capacity" not in aggregate_inverters([{}])
 
 
 # --- Cold-block sensors (daily stats + 7-day history + diagnostics) ----------

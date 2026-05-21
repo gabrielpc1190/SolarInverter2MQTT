@@ -154,14 +154,19 @@ def aggregate_inverters(
     if pv_any:
         out["pv_power"] = round(pv_total, 1)
 
-    # Rated installed battery capacity (kWh).
-    # SA historically published this as a static value derived from the
-    # inverter config block 0xE116. The exact register offset hasn't been
-    # confirmed, so we publish a hardcoded value here for SA-compatibility
-    # of the entity name. Override in your fork if your installation differs;
-    # the real (degraded) bank capacity should live in HA as an
-    # `input_number.*` helper that your automations actually consume.
-    out["capacity"] = 72.6
+    # NOTE: `capacity` (rated battery kWh) is intentionally NOT published.
+    # Removed 2026-05-20 because:
+    #   1. SA published it as a hardcoded static value (72.6) — never a real
+    #      measurement, just a config setting users entered in SA's web UI.
+    #   2. The value is wrong for most installs (Gabriel's bank is 57 kWh
+    #      actual; 72.6 was a never-corrected SA factory hint).
+    #   3. Without a state_class HA Statistics throws "no longer has state
+    #      class" warnings on the orphaned long-term stats.
+    #   4. The authoritative bank-capacity reference belongs in HA as an
+    #      `input_number.capacidad_bateria_kwh` helper that your automations
+    #      can edit; the inverter has no business owning that number.
+    # If you really need a static capacity entity in HA, define it client-side
+    # as an `input_number` or `template` sensor.
 
     # Daily stats + device info + 7-day historical PV — cold block extractions.
     # Each block is optional; when not present (because we're in a hot-only
