@@ -46,11 +46,35 @@ class LoggingCfg:
 
 
 @dataclass(frozen=True, slots=True)
+class BmsCfg:
+    """Configuración del módulo BMS BlueSun (Octopus / Seplos sobre BLE).
+
+    `enabled=False` por defecto: el daemon NO conecta a BLE ni publica BMS
+    discovery a menos que esté habilitado explícitamente. Esto permite hacer
+    deploy del código antes del cutover sin afectar producción.
+    """
+    enabled: bool = False
+    master_mac: str = ""                  # MAC del Pack01 master (ej. C0:D6:3C:52:0F:0D)
+    pack_count: int = 4                    # 1..4 packs detrás del master via RS485 interno
+    poll_fast_interval_s: float = 5.0      # cmd 0x10 PIA per-pack
+    poll_slow_interval_s: float = 300.0    # cmd 0x11 PIB per-pack
+    inter_pack_delay_s: float = 0.5        # rate-limit al chain RS485 interno
+    connect_timeout_s: float = 15.0
+    reconnect_initial_backoff_s: float = 2.0
+    reconnect_max_backoff_s: float = 60.0
+    mqtt_topic_prefix: str = "gadi_bms"    # topics raíz para MQTT publishing
+    mqtt_device_name: str = "Panel S3 Step5 UI"  # device name conservado para `entity_id` continuity
+    mqtt_device_id: str = "panel_cuartoelectrico_bluesun"  # discovery device.identifiers
+    energy_persist_path: str = "/var/lib/inverter-bridge/bms-energy.json"
+
+
+@dataclass(frozen=True, slots=True)
 class BridgeConfig:
     inverters: list[InverterCfg]
     mqtt: MqttCfg
     polling: PollingCfg = field(default_factory=PollingCfg)
     logging: LoggingCfg = field(default_factory=LoggingCfg)
+    bms: BmsCfg = field(default_factory=BmsCfg)
 
 
 def _parse_int_or_hex(v: Any) -> int:
@@ -114,4 +138,26 @@ def load_config(path: Path) -> BridgeConfig:
         format=log_data.get("format", "text"),
     )
 
-    return BridgeConfig(inverters=inverters, mqtt=mqtt, polling=polling, logging=logging_cfg)
+    bms_data = data.get("bms", {})
+    bms = BmsCfg(
+        enabled=bool(bms_data.get("enabled", False)),
+        master_mac=str(bms_data.get("master_mac", "")),
+        pack_count=int(bms_data.get("pack_count", 4)),
+        poll_fast_interval_s=float(bms_data.get("poll_fast_interval_s", 5.0)),
+        poll_slow_interval_s=float(bms_data.get("poll_slow_interval_s", 300.0)),
+        inter_pack_delay_s=float(bms_data.get("inter_pack_delay_s", 0.5)),
+        connect_timeout_s=float(bms_data.get("connect_timeout_s", 15.0)),
+        reconnect_initial_backoff_s=float(bms_data.get("reconnect_initial_backoff_s", 2.0)),
+        reconnect_max_backoff_s=float(bms_data.get("reconnect_max_backoff_s", 60.0)),
+        mqtt_topic_prefix=str(bms_data.get("mqtt_topic_prefix", "gadi_bms")),
+        mqtt_device_name=str(bms_data.get("mqtt_device_name", "Panel S3 Step5 UI")),
+        mqtt_device_id=str(bms_data.get("mqtt_device_id", "panel_cuartoelectrico_bluesun")),
+        energy_persist_path=str(bms_data.get("energy_persist_path", "/var/lib/inverter-bridge/bms-energy.json")),
+    )
+    if bms.enabled:
+        if not bms.master_mac:
+            raise ValueError("bms.enabled=true requires bms.master_mac to be set")
+        if not (1 <= bms.pack_count <= 16):
+            raise ValueError(f"bms.pack_count {bms.pack_count} out of range 1..16")
+
+    return BridgeConfig(inverters=inverters, mqtt=mqtt, polling=polling, logging=logging_cfg, bms=bms)
