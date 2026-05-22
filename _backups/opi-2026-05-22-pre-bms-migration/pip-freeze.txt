@@ -1,0 +1,5 @@
+# Editable install with no version control (inverter-bridge==0.1.0)
+-e /opt/inverter-bridge/src
+paho-mqtt==2.1.0
+pyserial==3.5
+PyYAML==6.0.3

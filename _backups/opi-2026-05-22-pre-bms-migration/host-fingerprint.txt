@@ -1,0 +1,99 @@
+=== uname ===
+Linux gadi-inverter-bridge 6.12.68-current-sunxi64 #4 SMP Fri Jan 30 09:28:49 UTC 2026 aarch64 GNU/Linux
+=== os release ===
+PRETTY_NAME="Armbian 26.2.1 trixie"
+VERSION="13 (trixie)"
+ARMBIAN_PRETTY_NAME="Armbian 26.2.1 trixie"
+=== hostnamectl ===
+ Static hostname: gadi-inverter-bridge
+       Icon name: computer
+      Machine ID: c2a48555b2364146b89bf2e7c26bd4d9
+         Boot ID: f588ba51e5a0458ab46c42f5dbe2d32a
+Operating System: Armbian 26.2.1 trixie
+          Kernel: Linux 6.12.68-current-sunxi64
+    Architecture: arm64
+=== ip a (no MACs trim) ===
+lo               UNKNOWN        127.0.0.1/8 ::1/128 
+end0             DOWN           
+wlan0            UP             172.16.9.32/24 metric 600 fe80::8ece:1cff:fe0f:ca5/64 
+=== hciconfig ===
+hci0:	Type: Primary  Bus: UART
+	BD Address: FB:09:49:5C:ED:02  ACL MTU: 1021:8  SCO MTU: 240:3
+	UP RUNNING 
+	RX bytes:2594 acl:0 sco:0 events:107 errors:0
+	TX bytes:3193 acl:0 sco:0 commands:80 errors:0
+	Features: 0xbf 0xff 0x8d 0xfe 0xdb 0x3d 0x7b 0xc7
+	Packet type: DM1 DM3 DM5 DH1 DH3 DH5 HV1 HV2 HV3 
+	Link policy: RSWITCH SNIFF 
+	Link mode: PERIPHERAL ACCEPT 
+	Name: 'gadi-inverter-bridge'
+	Class: 0x400000
+	Service Classes: Telephony
+	Device Class: Miscellaneous, 
+	HCI Version: 5.0 (0x9)  Revision: 0x400
+	LMP Version: 5.0 (0x9)  Subversion: 0x400
+	Manufacturer: Spreadtrum Communications Shanghai Ltd (492)
+
+=== lsusb ===
+Bus 001 Device 001: ID 1d6b:0002 Linux Foundation 2.0 root hub
+Bus 001 Device 003: ID 1a86:7523 QinHeng Electronics CH340 serial converter
+Bus 002 Device 001: ID 1d6b:0003 Linux Foundation 3.0 root hub
+Bus 003 Device 001: ID 1d6b:0002 Linux Foundation 2.0 root hub
+Bus 004 Device 001: ID 1d6b:0002 Linux Foundation 2.0 root hub
+Bus 005 Device 001: ID 1d6b:0001 Linux Foundation 1.1 root hub
+Bus 006 Device 001: ID 1d6b:0001 Linux Foundation 1.1 root hub
+Bus 006 Device 003: ID 1a86:7523 QinHeng Electronics CH340 serial converter
+=== /dev/ttyUSB* + by-path ===
+crw-rw---- 1 root dialout 188, 0 May 22 15:49 /dev/ttyUSB0
+crw-rw---- 1 root dialout 188, 1 May 22 15:49 /dev/ttyUSB1
+total 0
+lrwxrwxrwx 1 root root 13 May 20 23:58 platform-5311400.usb-usb-0:1:1.0-port0 -> ../../ttyUSB1
+lrwxrwxrwx 1 root root 13 May 20 23:58 platform-5311400.usb-usbv1-0:1:1.0-port0 -> ../../ttyUSB1
+lrwxrwxrwx 1 root root 13 May 21 00:00 platform-xhci-hcd.1.auto-usb-0:1:1.0-port0 -> ../../ttyUSB0
+lrwxrwxrwx 1 root root 13 May 21 00:00 platform-xhci-hcd.1.auto-usbv2-0:1:1.0-port0 -> ../../ttyUSB0
+=== lsblk ===
+NAME         MAJ:MIN RM   SIZE RO TYPE MOUNTPOINTS
+mmcblk2      179:0    0   7.3G  0 disk 
+└─mmcblk2p1  179:1    0   7.2G  0 part /var/log.hdd
+                                       /
+mmcblk2boot0 179:32   0     4M  1 disk 
+mmcblk2boot1 179:64   0     4M  1 disk 
+zram0        252:0    0 988.4M  0 disk [SWAP]
+zram1        252:1    0    50M  0 disk /var/log
+zram2        252:2    0     0B  0 disk 
+=== free -h ===
+               total        used        free      shared  buff/cache   available
+Mem:           1.9Gi       263Mi       1.4Gi        21Mi       384Mi       1.7Gi
+Swap:          988Mi          0B       988Mi
+=== systemd inverter-bridge status (compact) ===
+● inverter-bridge.service - Inverter Bridge - SRNE Modbus -> MQTT for GADI
+     Loaded: loaded (/etc/systemd/system/inverter-bridge.service; enabled; preset: enabled)
+     Active: active (running) since Thu 2026-05-21 16:11:21 UTC; 23h ago
+ Invocation: fd834b97cb1145df9533639db5f6950d
+   Main PID: 47027 (python)
+      Tasks: 4 (limit: 2189)
+     Memory: 15.4M (peak: 15.6M)
+        CPU: 9min 21.824s
+     CGroup: /system.slice/inverter-bridge.service
+             └─47027 /opt/inverter-bridge/src/.venv/bin/python -m inverter_bridge --config /etc/inverter-bridge.yaml
+
+May 22 14:38:16 gadi-inverter-bridge python[47027]: 2026-05-22 14:38:16,324 DEBUG   inverter_bridge.daemon :: inv inv2 block 0x010f not implemented (excode 0x02)
+=== deployed code dir timestamps ===
+total 116
+drwxr-xr-x  3 gabriel gabriel  4096 May 21 16:11 .
+drwxr-xr-x 10 gabriel gabriel  4096 May 21 01:01 ..
+-rwxr-xr-x  1 gabriel gabriel 10426 May 21 07:21 aggregator.py
+-rwxr-xr-x  1 gabriel gabriel  3716 May 21 00:33 config.py
+-rwxr-xr-x  1 gabriel gabriel   518 May 20 16:10 crc.py
+-rwxr-xr-x  1 gabriel gabriel 13804 May 21 03:29 daemon.py
+-rwxr-xr-x  1 gabriel gabriel 10583 May 20 21:46 energy_integrator.py
+-rwxr-xr-x  1 gabriel gabriel    95 May 21 00:32 __init__.py
+-rwxr-xr-x  1 gabriel gabriel  1285 May 20 16:20 __main__.py
+-rwxr-xr-x  1 gabriel gabriel  3421 May 21 00:51 modbus.py
+-rwxr-xr-x  1 gabriel gabriel 17899 May 21 04:09 mqtt_publisher.py
+-rwxr-xr-x  1 gabriel gabriel  1336 May 20 16:16 parsers.py
+drwxr-xr-x  2 root    root     4096 May 21 02:01 __pycache__
+-rwxr-xr-x  1 gabriel gabriel  5211 May 21 00:33 serial_io.py
+-rwxr-xr-x  1 root    root    11649 May 21 16:05 srne_map.py
+=== Python version in venv ===
+Python 3.13.5
