@@ -63,9 +63,18 @@ class BmsCfg:
     reconnect_initial_backoff_s: float = 2.0
     reconnect_max_backoff_s: float = 60.0
     mqtt_topic_prefix: str = "gadi_bms"    # topics raíz para MQTT publishing
-    mqtt_device_name: str = "Panel S3 Step5 UI"  # device name conservado para `entity_id` continuity
-    mqtt_device_id: str = "panel_cuartoelectrico_bluesun"  # discovery device.identifiers
+    mqtt_device_name: str = "BlueSun"      # device name (slug → entity_id prefix)
+    mqtt_device_id: str = "bluesun_bms"    # discovery device.identifiers
     energy_persist_path: str = "/var/lib/inverter-bridge/bms-energy.json"
+    # Pack serials (no son legibles por BLE Octopus para packs 2-4; solo pack 1 master
+    # los expone via cmd 0x17/VIA). Hardcoded basado en etiqueta + app Octopus.
+    # Si se reemplaza un pack, editar y reiniciar daemon.
+    pack_serials: tuple[str, ...] = (
+        "BN012502180020",   # Pack 1
+        "BN012502180443",   # Pack 2
+        "BN012502180269",   # Pack 3
+        "BN012502180456",   # Pack 4
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,6 +148,15 @@ def load_config(path: Path) -> BridgeConfig:
     )
 
     bms_data = data.get("bms", {})
+    # Pack serials override desde YAML (lista, opcional)
+    serials_yaml = bms_data.get("pack_serials")
+    if serials_yaml is None:
+        serials = BmsCfg.__dataclass_fields__["pack_serials"].default
+    else:
+        if not isinstance(serials_yaml, list) or not all(isinstance(x, str) for x in serials_yaml):
+            raise ValueError("bms.pack_serials debe ser lista de strings")
+        serials = tuple(serials_yaml)
+
     bms = BmsCfg(
         enabled=bool(bms_data.get("enabled", False)),
         master_mac=str(bms_data.get("master_mac", "")),
@@ -150,9 +168,10 @@ def load_config(path: Path) -> BridgeConfig:
         reconnect_initial_backoff_s=float(bms_data.get("reconnect_initial_backoff_s", 2.0)),
         reconnect_max_backoff_s=float(bms_data.get("reconnect_max_backoff_s", 60.0)),
         mqtt_topic_prefix=str(bms_data.get("mqtt_topic_prefix", "gadi_bms")),
-        mqtt_device_name=str(bms_data.get("mqtt_device_name", "Panel S3 Step5 UI")),
-        mqtt_device_id=str(bms_data.get("mqtt_device_id", "panel_cuartoelectrico_bluesun")),
+        mqtt_device_name=str(bms_data.get("mqtt_device_name", "BlueSun")),
+        mqtt_device_id=str(bms_data.get("mqtt_device_id", "bluesun_bms")),
         energy_persist_path=str(bms_data.get("energy_persist_path", "/var/lib/inverter-bridge/bms-energy.json")),
+        pack_serials=serials,
     )
     if bms.enabled:
         if not bms.master_mac:

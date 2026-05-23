@@ -19,6 +19,7 @@ from concurrent.futures import TimeoutError as FuturesTimeoutError
 from pathlib import Path
 
 from .aggregator import aggregate_inverters
+from .bms.service import BmsService
 from .config import BridgeConfig, InverterCfg
 from .energy_integrator import EnergyIntegrator
 from .modbus import ModbusException
@@ -92,6 +93,11 @@ class Daemon:
             * block_count_max
             + 10
         )
+        # Optional BMS BlueSun service (lazy: solo arranca si cfg.bms.enabled).
+        # Corre en thread separado con su propio asyncio loop + paho client.
+        self._bms_service: BmsService | None = (
+            BmsService(cfg.bms, cfg.mqtt) if cfg.bms.enabled else None
+        )
 
     # ----- lifecycle -----
 
@@ -100,6 +106,12 @@ class Daemon:
         self.publisher.connect()
         self.publisher.publish_discovery()
         self.publisher.set_online()
+        if self._bms_service is not None:
+            try:
+                self._bms_service.start()
+            except Exception:
+                log.exception("BMS service failed to start; continuando solo con inversores")
+                self._bms_service = None
         try:
             self._loop_forever()
         finally:
@@ -109,6 +121,11 @@ class Daemon:
                 self.save_energy_state()
             except Exception:
                 log.exception("failed to persist energy state on shutdown")
+            if self._bms_service is not None:
+                try:
+                    self._bms_service.stop()
+                except Exception:
+                    log.exception("failed to stop BMS service")
             self.publisher.disconnect()
             # Drain the executor so in-flight serial reads finish cleanly
             # (don't cancel — pyserial.close is fast, and cancelling could
