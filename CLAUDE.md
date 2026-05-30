@@ -38,8 +38,17 @@ Daemon Python que reemplaza Solar Assistant en el sitio GADI. Despliegue en prod
 2. `pytest` — debe pasar todo en <3 s.
 3. Commit (Conv. Commits, inglés): `feat:` / `fix:` / `refactor:` / etc.
 4. Push a `master`.
-5. En el OPi: `cd /opt/inverter-bridge && git pull && systemctl restart inverter-bridge` (o lo que `docs/DEPLOYMENT.md` indique exactamente).
+5. **Deploy al OPi vía scp + restart** (NO git pull — ver nota abajo):
+   ```bash
+   scp inverter_bridge/<files-modificados> GADI-InverterBridge:/tmp/update/
+   ssh GADI-InverterBridge "sudo install -o inverter-bridge -g inverter-bridge -m 0644 \
+     /tmp/update/<file>.py /opt/inverter-bridge/src/inverter_bridge/<path>/<file>.py && \
+     sudo systemctl restart inverter-bridge"
+   ```
+   El venv en `/opt/inverter-bridge/src/.venv/` tiene el package instalado en modo **editable** (`Editable project location: /opt/inverter-bridge/src`), así que cambios directos al código son recogidos al restart sin reinstalar.
 6. `journalctl -u inverter-bridge -n 50 -f` para confirmar arranque limpio.
+
+> **Nota:** el OPi de producción no tiene `git` instalado ni un `.git` en `/opt/inverter-bridge/src/` (verificado 2026-05-30). El doc `docs/DEPLOYMENT.md` describe el bootstrap inicial con `git clone` pero el flujo de updates es **scp manual + restart**. Si querés volver a `git pull` como flujo principal hay que `apt install git` en el OPi y `git clone` reemplazando `/opt/inverter-bridge/src/`.
 
 ## Gotchas
 
