@@ -14,7 +14,7 @@ from .octopus_protocol import PiaData, PibData
 
 @dataclass(frozen=True)
 class BankAggregates:
-    """10 + 2 (splits) aggregates bank-level del banco BlueSun.
+    """10 + 2 (splits) + 4 (per-pack splits) aggregates bank-level del banco BlueSun.
 
     Todos son `None` cuando ningún pack tiene data suficiente para calcular.
     """
@@ -32,9 +32,17 @@ class BankAggregates:
     # PIB-derived
     max_cell_temp_C: float | None      # max sobre 16 cell temps (4 cells * 4 packs)
 
-    # Split power (siempre derivados de power_W, never None si power_W no es None)
+    # Split power (derivados de power_W, never None si power_W no es None)
     power_charging_W: float | None     # max(power_W, 0)
     power_discharging_W: float | None  # max(-power_W, 0)
+
+    # Split per-pack current/power. Útiles cuando hay balanceo interno
+    # (un pack carga mientras otro descarga → net engaña). Calculados sobre
+    # I_pack individual con signo.
+    charge_current_total_A: float | None     # Σ I_pack donde I>0
+    discharge_current_total_A: float | None  # Σ |I_pack| donde I<0
+    charge_power_total_W: float | None       # Σ V_pack * I_pack donde I>0
+    discharge_power_total_W: float | None    # Σ V_pack * abs(I_pack) donde I<0
 
 
 def _avg_or_none(values: list[float]) -> float | None:
@@ -103,6 +111,23 @@ def aggregate_bank(
         power_charging = power if power > 0 else 0.0
         power_discharging = -power if power < 0 else 0.0
 
+    # Per-pack splits (más finos que el net: revelan balanceo interno)
+    pack_pairs = [(p.voltage_V, p.current_A) for p in pia_by_pack.values()]
+    if pack_pairs:
+        charge_currents = [cur for _, cur in pack_pairs if cur > 0]
+        discharge_currents = [-cur for _, cur in pack_pairs if cur < 0]
+        charge_powers = [volt * cur for volt, cur in pack_pairs if cur > 0]
+        discharge_powers = [volt * -cur for volt, cur in pack_pairs if cur < 0]
+        charge_current_total = sum(charge_currents) if charge_currents else 0.0
+        discharge_current_total = sum(discharge_currents) if discharge_currents else 0.0
+        charge_power_total = sum(charge_powers) if charge_powers else 0.0
+        discharge_power_total = sum(discharge_powers) if discharge_powers else 0.0
+    else:
+        charge_current_total = None
+        discharge_current_total = None
+        charge_power_total = None
+        discharge_power_total = None
+
     # PIB-derived ─────────────────────────────────────────────────
     cell_temps = []
     for pib in pib_by_pack.values():
@@ -124,4 +149,8 @@ def aggregate_bank(
         max_cell_temp_C=max_cell_temp,
         power_charging_W=power_charging,
         power_discharging_W=power_discharging,
+        charge_current_total_A=charge_current_total,
+        discharge_current_total_A=discharge_current_total,
+        charge_power_total_W=charge_power_total,
+        discharge_power_total_W=discharge_power_total,
     )

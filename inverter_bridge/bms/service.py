@@ -76,6 +76,8 @@ class BmsService:
         # Telemetry: counter de parses exitosos (PIA + PIB). Incrementa cada
         # decode OK; expuesto como diagnostic para watchdog en HA.
         self._parses_ok: int = 0
+        # Per-pack parse counters: distinguen LIVE vs FROZEN vs NO-RESPONSE.
+        self._parses_by_pack: dict[int, int] = {p: 0 for p in range(1, 5)}
 
     # ───── Lifecycle ──────────────────────────────────────────────
 
@@ -258,6 +260,7 @@ class BmsService:
                     pia = await client.poll_pia(pack)
                     self._pia_state[pack] = pia
                     self._parses_ok += 1
+                    self._parses_by_pack[pack] = self._parses_by_pack.get(pack, 0) + 1
                     log.debug(
                         "PIA pack=%d V=%.2f I=%+.2f SoC=%.1f",
                         pack, pia.voltage_V, pia.current_A, pia.soc_pct,
@@ -277,6 +280,7 @@ class BmsService:
                         pib = await client.poll_pib(pack)
                         self._pib_state[pack] = pib
                         self._parses_ok += 1
+                        self._parses_by_pack[pack] = self._parses_by_pack.get(pack, 0) + 1
                         self._publish_pib_state(pib)
                     except (TimeoutError, BleakError) as e:
                         log.warning("PIB pack=%d FAIL: %s", pack, e)
@@ -293,6 +297,8 @@ class BmsService:
 
             # Telemetry
             self._pub("bluesun_octopus_parses_ok", self._parses_ok)
+            for pack_num, parses in self._parses_by_pack.items():
+                self._pub(f"bluesun_pack{pack_num:02d}_parses", parses)
 
             # Wait hasta cumplir el fast interval (slow polls a costa del wall-clock)
             elapsed = time.monotonic() - cycle_start
@@ -353,6 +359,10 @@ class BmsService:
         self._pub("bluesun_bank_min_soh", agg.min_soh_pct)
         self._pub("bluesun_bank_max_cycles", agg.max_cycles)
         self._pub("bluesun_bank_max_cell_temp", agg.max_cell_temp_C)
+        self._pub("bluesun_bank_charge_current_total", agg.charge_current_total_A)
+        self._pub("bluesun_bank_discharge_current_total", agg.discharge_current_total_A)
+        self._pub("bluesun_bank_charge_power_total", agg.charge_power_total_W)
+        self._pub("bluesun_bank_discharge_power_total", agg.discharge_power_total_W)
 
     def _integrate_energy(self, agg: BankAggregates) -> None:
         """Integra power_charging/discharging en Wh acumulado."""

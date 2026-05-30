@@ -154,6 +154,24 @@ def _bank_entities() -> list[EntityDef]:
             "bluesun_bank_max_cell_temp", "Bank Max Cell Temp", "°C", "temperature",
             accuracy=1,
         ),
+        # Per-pack splits (port de Yoga panel-yoga-bms-v1.yaml): útiles cuando
+        # hay balanceo interno entre packs y el net `_current_total` engaña.
+        EntityDef(
+            "bluesun_bank_charge_current_total", "Bank Charge Current Total", "A", "current",
+            accuracy=2, icon="mdi:battery-plus-variant",
+        ),
+        EntityDef(
+            "bluesun_bank_discharge_current_total", "Bank Discharge Current Total", "A", "current",
+            accuracy=2, icon="mdi:battery-minus-variant",
+        ),
+        EntityDef(
+            "bluesun_bank_charge_power_total", "Bank Charge Power Total", "W", "power",
+            accuracy=0, icon="mdi:battery-plus-variant",
+        ),
+        EntityDef(
+            "bluesun_bank_discharge_power_total", "Bank Discharge Power Total", "W", "power",
+            accuracy=0, icon="mdi:battery-minus-variant",
+        ),
     ]
 
 
@@ -173,17 +191,25 @@ def _energy_entities() -> list[EntityDef]:
 
 def _telemetry_entities() -> list[EntityDef]:
     """Entidades diagnósticas para monitorear salud del daemon BMS."""
-    return [
+    entities = [
         EntityDef(
             "bluesun_octopus_parses_ok", "Octopus Parses OK", None, None,
             state_class="total_increasing", icon="mdi:counter",
             accuracy=0, entity_category="diagnostic",
         ),
     ]
+    # Per-pack parse counters: distinguen LIVE vs FROZEN vs NO-RESPONSE por pack.
+    for p in range(1, 5):
+        entities.append(EntityDef(
+            f"bluesun_pack{p:02d}_parses", f"Pack{p:02d} Parses", None, None,
+            state_class="total_increasing", icon="mdi:counter",
+            accuracy=0, entity_category="diagnostic",
+        ))
+    return entities
 
 
 def all_bms_entities() -> list[EntityDef]:
-    """Catálogo: 28 PIA + 40 PIB + 4 serial + 12 bank + 2 energy + 1 telemetry = 87."""
+    """Catálogo: 28 PIA + 40 PIB + 4 serial + 16 bank + 2 energy + 5 telemetry = 95."""
     out: list[EntityDef] = []
     for p in (1, 2, 3, 4):
         out.extend(_pia_entities_for_pack(p))
