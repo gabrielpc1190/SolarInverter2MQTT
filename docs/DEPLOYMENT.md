@@ -47,7 +47,9 @@ sudo $EDITOR /etc/inverter-bridge.yaml
 #   (validate with `ls -la /dev/serial/by-path/`)
 # - Update `mqtt.host` to your broker
 # - Update `mqtt.username`
-# - Keep `topic_prefix: solar_assistant` if you want SA-compatible entity_ids in HA
+# - `topic_prefix` defaults to `gadi_inverters` (renamed from `solar_assistant` on
+#   2026-06-03). HA entity_ids are unaffected by the prefix — discovery unique_ids
+#   are prefix-independent — so HA re-binds existing entities by unique_id.
 
 sudo install -o inverter-bridge -g inverter-bridge -m 0600 /dev/stdin \
     /etc/inverter-bridge.secrets <<< 'YOUR_MQTT_PASSWORD_HERE'
@@ -70,12 +72,12 @@ From any host with `mosquitto-clients` on the same network as your broker:
 
 ```bash
 mosquitto_sub -h <BROKER_IP> -u <USER> -P "$(cat /path/to/secret)" \
-    -t 'solar_assistant/#' -v -W 30 | head -50
+    -t 'gadi_inverters/#' -v -W 30 | head -50
 ```
 
 Within 30 s you should see:
 
-- `solar_assistant/availability` → `online`
+- `gadi_inverters/availability` → `online`
 - ~85 retained discovery payloads on `homeassistant/sensor/<unique_id>/config` and `homeassistant/binary_sensor/inverter_bridge_online/config`
 - State updates every ~3 s on the per-inverter hot-tier sensors
 - Energy accumulators (`total/battery_energy_in`, `total/pv_energy`, etc.) ticking up over time
