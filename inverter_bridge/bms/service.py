@@ -56,6 +56,7 @@ class BmsService:
         # MQTT client (separado del inverter publisher para aislamiento)
         self._mqtt: mqtt.Client | None = None
         self._mqtt_connected = threading.Event()
+        self._client_id = f"{mqtt_cfg.client_id}_bms"
 
         # Async machinery
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -147,28 +148,38 @@ class BmsService:
 
     def _connect_mqtt(self) -> None:
         # client_id distinto del inverter publisher
-        client_id = f"{self.mqtt_cfg.client_id}_bms"
         self._mqtt = mqtt.Client(
             mqtt.CallbackAPIVersion.VERSION2,
-            client_id=client_id,
+            client_id=self._client_id,
             clean_session=True,
         )
         self._mqtt.username_pw_set(self.mqtt_cfg.username, self.mqtt_cfg.password)
         self._mqtt.will_set(self._availability_topic, "offline", qos=1, retain=True)
-
-        def _on_connect(client, _ud, _flags, rc, _props=None):
-            if rc == 0:
-                log.info("MQTT conectado (bms client_id=%s)", client_id)
-                self._mqtt_connected.set()
-            else:
-                log.error("MQTT conexión falló rc=%s", rc)
-
-        self._mqtt.on_connect = _on_connect
+        self._mqtt.on_connect = self._handle_mqtt_connect
         self._mqtt.connect(self.mqtt_cfg.host, self.mqtt_cfg.port, keepalive=60)
         self._mqtt.loop_start()
         # Espera hasta 10s a que conecte
         if not self._mqtt_connected.wait(timeout=10.0):
             raise RuntimeError("MQTT no se conectó en 10s")
+
+    def _handle_mqtt_connect(self, _client, _ud, _flags, rc, _props=None) -> None:
+        """on_connect handler — re-asienta discovery + availability=online en CADA
+        (re)conexión.
+
+        paho auto-reconnecta vía loop_start(); cuando la conexión se cae (p.ej. un
+        reinicio del router) el broker publica el LWT 'offline' retenido. Si no
+        republicamos aquí, tras el corte el BMS queda 'offline' permanente en HA
+        hasta reiniciar el proceso. El inverter publisher hace lo análogo.
+        """
+        if rc != 0:
+            log.error("MQTT (bms) conexión falló rc=%s", rc)
+            return
+        log.info("MQTT conectado (bms client_id=%s)", self._client_id)
+        try:
+            self._publish_discovery()
+        except Exception:
+            log.exception("Error republicando discovery/availability del BMS en on_connect")
+        self._mqtt_connected.set()
 
     def _publish_discovery(self) -> None:
         assert self._mqtt is not None
@@ -212,7 +223,8 @@ class BmsService:
             self._loop = asyncio.new_event_loop()
             asyncio.set_event_loop(self._loop)
             self._stop_event = asyncio.Event()
-            self._publish_discovery()
+            # Discovery + availability=online se publican en _handle_mqtt_connect
+            # (en cada (re)conexión), no aquí, para que sobrevivan a reconexiones MQTT.
             self._loop.run_until_complete(self._run_async())
         except Exception:
             log.exception("BmsService thread crashed")
