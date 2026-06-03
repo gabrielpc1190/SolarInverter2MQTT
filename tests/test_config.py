@@ -141,4 +141,4 @@ def test_load_example_config_in_repo():
     cfg = load_config(example)
     assert cfg.inverters[0].slave == 1
     assert cfg.inverters[1].slave == 2
-    assert cfg.mqtt.topic_prefix == "solar_assistant"
+    assert cfg.mqtt.topic_prefix == "gadi_inverters"

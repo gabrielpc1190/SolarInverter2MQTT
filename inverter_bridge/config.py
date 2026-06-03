@@ -33,7 +33,7 @@ class MqttCfg:
     password: str
     port: int = 1883
     client_id: str = "inverter_bridge"
-    topic_prefix: str = "solar_assistant"
+    topic_prefix: str = "gadi_inverters"
     discovery_prefix: str = "homeassistant"
     retain_discovery: bool = True
     qos: int = 0
@@ -125,7 +125,7 @@ def load_config(path: Path) -> BridgeConfig:
         password=password,
         port=int(mq.get("port", 1883)),
         client_id=mq.get("client_id", "inverter_bridge"),
-        topic_prefix=mq.get("topic_prefix", "solar_assistant"),
+        topic_prefix=mq.get("topic_prefix", "gadi_inverters"),
         discovery_prefix=mq.get("discovery_prefix", "homeassistant"),
         retain_discovery=bool(mq.get("retain_discovery", True)),
         qos=int(mq.get("qos", 0)),

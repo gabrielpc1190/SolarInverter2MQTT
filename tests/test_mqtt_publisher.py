@@ -19,7 +19,7 @@ def cfg():
         host="broker.local",
         username="u",
         password="p",
-        topic_prefix="solar_assistant",
+        topic_prefix="gadi_inverters",
         discovery_prefix="homeassistant",
         retain_discovery=True,
         qos=0,
@@ -60,7 +60,7 @@ def test_connect_sets_lwt_at_sa_topic(cfg, mock_client):
     pub = MqttPublisher(cfg)
     pub.connect()
     mock_client.will_set.assert_called_once_with(
-        "solar_assistant/availability",
+        "gadi_inverters/availability",
         payload="offline",
         qos=0,
         retain=True,
@@ -72,7 +72,7 @@ def test_publish_aggregate_value_uses_sa_topic(cfg, mock_client):
     pub.connect()
     pub.publish_value("battery_voltage", 52.1)
     mock_client.publish.assert_any_call(
-        "solar_assistant/total/battery_voltage/state", payload="52.1", qos=0, retain=False
+        "gadi_inverters/total/battery_voltage/state", payload="52.1", qos=0, retain=False
     )
 
 
@@ -81,7 +81,7 @@ def test_publish_per_inverter_value_uses_sa_topic(cfg, mock_client):
     pub.connect()
     pub.publish_value("inverter_1_pv_power", 750.0)
     mock_client.publish.assert_any_call(
-        "solar_assistant/inverter_1/pv_power/state", payload="750.0", qos=0, retain=False
+        "gadi_inverters/inverter_1/pv_power/state", payload="750.0", qos=0, retain=False
     )
 
 
@@ -97,7 +97,7 @@ def test_publish_discovery_uses_sa_unique_ids(cfg, mock_client):
     )
     payload = json.loads(soc_call.kwargs["payload"])
     assert payload["unique_id"] == "total_battery_state_of_charge"
-    assert payload["state_topic"] == "solar_assistant/total/battery_state_of_charge/state"
+    assert payload["state_topic"] == "gadi_inverters/total/battery_state_of_charge/state"
     assert payload["device_class"] == "battery"
     assert payload["state_class"] == "measurement"
     assert payload["unit_of_measurement"] == "%"
@@ -120,7 +120,7 @@ def test_publish_set_online(cfg, mock_client):
     pub.connect()
     pub.set_online()
     mock_client.publish.assert_any_call(
-        "solar_assistant/availability", payload="online", qos=0, retain=True
+        "gadi_inverters/availability", payload="online", qos=0, retain=True
     )
 
 
@@ -129,7 +129,7 @@ def test_disconnect_sets_offline(cfg, mock_client):
     pub.connect()
     pub.disconnect()
     mock_client.publish.assert_any_call(
-        "solar_assistant/availability", payload="offline", qos=0, retain=True
+        "gadi_inverters/availability", payload="offline", qos=0, retain=True
     )
 
 
@@ -168,19 +168,19 @@ def test_meta_discovery_published(cfg, mock_client):
     )
     payload = json.loads(uptime_call.kwargs["payload"])
     assert payload["unique_id"] == "meta_uptime_s"
-    assert payload["state_topic"] == "solar_assistant/_meta/uptime_s/state"
+    assert payload["state_topic"] == "gadi_inverters/_meta/uptime_s/state"
     assert payload["device_class"] == "duration"
     assert payload["state_class"] == "total_increasing"
     assert payload["unit_of_measurement"] == "s"
 
 
 def test_meta_value_published_to_top_level_topic(cfg, mock_client):
-    """publish_value('_meta/uptime_s', ...) must land at solar_assistant/_meta/uptime_s/state."""
+    """publish_value('_meta/uptime_s', ...) must land at gadi_inverters/_meta/uptime_s/state."""
     pub = MqttPublisher(cfg)
     pub.connect()
     pub.publish_value("_meta/uptime_s", 42.0)
     mock_client.publish.assert_any_call(
-        "solar_assistant/_meta/uptime_s/state", payload="42.0", qos=0, retain=False
+        "gadi_inverters/_meta/uptime_s/state", payload="42.0", qos=0, retain=False
     )
 
 
@@ -197,7 +197,7 @@ def test_binary_sensor_online_discovery(cfg, mock_client):
     )
     payload = json.loads(call.kwargs["payload"])
     assert payload["unique_id"] == "inverter_bridge_online"
-    assert payload["state_topic"] == "solar_assistant/availability"
+    assert payload["state_topic"] == "gadi_inverters/availability"
     assert payload["payload_on"] == "online"
     assert payload["payload_off"] == "offline"
     assert payload["device_class"] == "connectivity"
@@ -300,7 +300,7 @@ def test_energy_sensors_in_discovery(cfg, mock_client):
     )
     payload = json.loads(pv_energy_call.kwargs["payload"])
     assert payload["unique_id"] == "total_pv_energy"
-    assert payload["state_topic"] == "solar_assistant/total/pv_energy/state"
+    assert payload["state_topic"] == "gadi_inverters/total/pv_energy/state"
     assert payload["device_class"] == "energy"
     assert payload["state_class"] == "total_increasing"
     assert payload["unit_of_measurement"] == "kWh"

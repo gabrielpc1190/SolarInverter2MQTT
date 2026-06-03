@@ -7,17 +7,19 @@ requiring dashboard/automation changes.
 SA convention (verified 2026-05-20 by inspecting retained discovery payloads
 on our MQTT broker by inspecting retained discovery payloads before SA was disconnected):
 
-- Topic prefix: `solar_assistant`
-- Aggregated sensors: state at `solar_assistant/total/<key>/state`,
+- Topic prefix: `gadi_inverters` (renamed from `solar_assistant` on 2026-06-03;
+  the unique_ids below are SA-derived and were intentionally NOT changed, so the
+  prefix rename did not affect any HA entity_id).
+- Aggregated sensors: state at `gadi_inverters/total/<key>/state`,
   unique_id `total_<key>` (e.g. `total_battery_state_of_charge`).
-- Per-inverter sensors: state at `solar_assistant/inverter_<N>/<key>/state`,
+- Per-inverter sensors: state at `gadi_inverters/inverter_<N>/<key>/state`,
   unique_id `inverter_<N>_<key>` (e.g. `inverter_1_pv_voltage`).
 - Discovery topic: `homeassistant/sensor/<unique_id>/config` (retained).
 - Device identifiers: `["sa_inverter"]`, model "SRNE Split-phase".
 
 Extensions beyond SA (audit findings F-2, F-4, F-6):
 
-- `_meta/*` diagnostic sensors: topic `solar_assistant/_meta/<key>/state`,
+- `_meta/*` diagnostic sensors: topic `gadi_inverters/_meta/<key>/state`,
   unique_id `meta_<key>` (slash collapsed) — top-level, not under `total/`.
 - `binary_sensor.inverter_bridge_online`: derives state from the
   `availability_topic` (LWT) for the spec §12.3 watchdog automation.
@@ -125,7 +127,7 @@ ENERGY_SENSORS: dict[str, tuple[str, str | None, str | None]] = {
     "grid_energy_out":     ("kWh", "energy", "total_increasing"),
 }
 
-# Diagnostic sensors (F-4). Published top-level under `solar_assistant/_meta/`,
+# Diagnostic sensors (F-4). Published top-level under `gadi_inverters/_meta/`,
 # not under `total/`. unique_id is `meta_<key>` (slash replaced).
 META_SENSORS: dict[str, tuple[str, str | None, str | None]] = {
     "_meta/poll_duration_ms":  ("ms", None,       "measurement"),
@@ -238,7 +240,7 @@ class MqttPublisher:
             client_id=cfg.client_id,
             callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
         )
-        # Availability is at the configured prefix root (matches SA: solar_assistant/availability)
+        # Availability is at the configured prefix root (gadi_inverters/availability; was solar_assistant pre-2026-06-03)
         self._availability_topic = f"{cfg.topic_prefix}/availability"
         self._connected = False
 

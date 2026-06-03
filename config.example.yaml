@@ -31,14 +31,16 @@ mqtt:
   username: inverter_bridge
   password_file: /etc/inverter-bridge.secrets
   client_id: inverter_bridge
-  # IMPORTANT: topic_prefix matches what Solar Assistant used so existing HA
-  # entities keep their entity_id (unique_id matches) without any dashboard or
-  # automation changes. The daemon publishes:
-  #   solar_assistant/total/<key>/state            (aggregates)
-  #   solar_assistant/inverter_<N>/<key>/state     (per-inverter)
-  #   solar_assistant/_meta/<diagnostic>/state     (poll_duration_ms etc.)
-  #   solar_assistant/availability                 (online/offline retained)
-  topic_prefix: solar_assistant
+  # topic_prefix: MQTT topic root for the inverter data. Renamed from
+  # `solar_assistant` to `gadi_inverters` on 2026-06-03 (the real Solar Assistant
+  # RPi is long gone). HA entity_ids are unaffected: discovery unique_ids
+  # (`total_<key>`, `inverter_<N>_<key>`) are independent of this prefix, so HA
+  # re-binds the existing renamed entities by unique_id. The daemon publishes:
+  #   gadi_inverters/total/<key>/state            (aggregates)
+  #   gadi_inverters/inverter_<N>/<key>/state     (per-inverter)
+  #   gadi_inverters/_meta/<diagnostic>/state     (poll_duration_ms etc.)
+  #   gadi_inverters/availability                 (online/offline retained)
+  topic_prefix: gadi_inverters
   discovery_prefix: homeassistant
   retain_discovery: true
   qos: 0
