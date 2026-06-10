@@ -62,6 +62,12 @@ class BmsCfg:
     connect_timeout_s: float = 15.0
     reconnect_initial_backoff_s: float = 2.0
     reconnect_max_backoff_s: float = 60.0
+    # Si un ciclo de poll completo no logra NINGÚN parse OK durante este número
+    # de ciclos consecutivos, el poll loop se rinde y fuerza una reconexión BLE
+    # fresca (cubre el caso "link zombie": is_connected sigue True pero todo da
+    # timeout). El caso de desconexión explícita (is_connected=False) sale de
+    # inmediato sin esperar este umbral.
+    max_failed_cycles: int = 3
     mqtt_topic_prefix: str = "gadi_bms"    # topics raíz para MQTT publishing
     mqtt_device_name: str = "BlueSun"      # device name (slug → entity_id prefix)
     mqtt_device_id: str = "bluesun_bms"    # discovery device.identifiers

@@ -263,9 +263,14 @@ class BmsService:
         fast_interval = self.bms_cfg.poll_fast_interval_s
         pack_count = self.bms_cfg.pack_count
         inter_pack = self.bms_cfg.inter_pack_delay_s
+        max_failed_cycles = self.bms_cfg.max_failed_cycles
+        # Ciclos consecutivos sin NINGÚN parse OK. Cuando llega a
+        # max_failed_cycles, salimos para que _run_async reconecte (link zombie).
+        failed_cycles = 0
 
         while not self._stop_event.is_set():
             cycle_start = time.monotonic()
+            cycle_ok = 0  # parses exitosos en este ciclo (PIA + PIB)
             # PIA round: todos los packs
             for pack in range(1, pack_count + 1):
                 try:
@@ -273,6 +278,7 @@ class BmsService:
                     self._pia_state[pack] = pia
                     self._parses_ok += 1
                     self._parses_by_pack[pack] = self._parses_by_pack.get(pack, 0) + 1
+                    cycle_ok += 1
                     log.debug(
                         "PIA pack=%d V=%.2f I=%+.2f SoC=%.1f",
                         pack, pia.voltage_V, pia.current_A, pia.soc_pct,
@@ -280,6 +286,11 @@ class BmsService:
                     self._publish_pia_state(pia)
                 except (TimeoutError, BleakError) as e:
                     log.warning("PIA pack=%d FAIL: %s", pack, e)
+                    # Si el link BLE se cayó, no tiene sentido seguir polleando
+                    # un cliente muerto: salimos para que _run_async reconecte.
+                    if not client.is_connected:
+                        log.warning("BLE desconectado (PIA pack=%d) — saliendo del poll loop para reconectar", pack)
+                        return
                 await asyncio.sleep(inter_pack)
                 if self._stop_event.is_set():
                     return
@@ -293,12 +304,30 @@ class BmsService:
                         self._pib_state[pack] = pib
                         self._parses_ok += 1
                         self._parses_by_pack[pack] = self._parses_by_pack.get(pack, 0) + 1
+                        cycle_ok += 1
                         self._publish_pib_state(pib)
                     except (TimeoutError, BleakError) as e:
                         log.warning("PIB pack=%d FAIL: %s", pack, e)
+                        if not client.is_connected:
+                            log.warning("BLE desconectado (PIB pack=%d) — saliendo del poll loop para reconectar", pack)
+                            return
                     await asyncio.sleep(inter_pack)
                     if self._stop_event.is_set():
                         return
+
+            # Watchdog de link zombie: si el ciclo completo no logró ningún parse
+            # (is_connected miente, todo da timeout) contamos; al llegar al umbral
+            # forzamos reconexión fresca en vez de girar para siempre.
+            if cycle_ok == 0:
+                failed_cycles += 1
+                if failed_cycles >= max_failed_cycles:
+                    log.warning(
+                        "%d ciclos consecutivos sin parse OK — forzando reconexión BLE",
+                        failed_cycles,
+                    )
+                    return
+            else:
+                failed_cycles = 0
 
             # Aggregate + publish bank-level
             agg = aggregate_bank(self._pia_state, self._pib_state)

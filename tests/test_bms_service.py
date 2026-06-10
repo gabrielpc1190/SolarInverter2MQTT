@@ -1,8 +1,10 @@
 """Tests for the BMS MQTT service lifecycle (connect / reconnect availability)."""
 
+import asyncio
 from unittest.mock import MagicMock
 
 import pytest
+from bleak.exc import BleakError
 
 from inverter_bridge.bms.service import BmsService
 from inverter_bridge.config import BmsCfg, MqttCfg
@@ -61,3 +63,72 @@ def test_on_connect_failure_does_not_publish_online(svc):
     ]
     assert online_calls == []
     assert not svc._mqtt_connected.is_set()
+
+
+# ───── Poll loop self-healing (BLE reconnect) ──────────────────────────
+#
+# Bug (2026-06-09): when the BLE link dropped mid-loop, every poll raised
+# BleakError("not connected"), but _poll_loop swallowed it per-pack and kept
+# spinning forever. The reconnect path in _run_async (the `async with` re-entry
+# that calls connect() again) was never reached, so the BMS stayed dead until a
+# manual daemon restart. _poll_loop MUST return on a dead link so _run_async
+# tears down the client and reconnects.
+
+
+class _FakeClient:
+    """Minimal stand-in for OctopusBleClient. BLE hardware is unavoidable to
+    mock, so we fake the two poll coroutines and the is_connected flag."""
+
+    def __init__(self, *, connected: bool, exc: Exception) -> None:
+        self.is_connected = connected
+        self._exc = exc
+        self.poll_calls = 0
+
+    async def poll_pia(self, pack: int):
+        self.poll_calls += 1
+        raise self._exc
+
+    async def poll_pib(self, pack: int):
+        self.poll_calls += 1
+        raise self._exc
+
+
+def _fast_cfg(**overrides) -> BmsCfg:
+    base = dict(
+        enabled=True,
+        master_mac="C0:D6:3C:52:0F:0D",
+        inter_pack_delay_s=0.0,
+        poll_fast_interval_s=0.0,
+        poll_slow_interval_s=1e9,  # keep PIB out of the way for these tests
+    )
+    base.update(overrides)
+    return BmsCfg(**base)
+
+
+def test_poll_loop_returns_when_ble_link_drops(mqtt_cfg):
+    """Fix A: poll raises 'not connected' AND client reports disconnected ->
+    _poll_loop must return promptly so _run_async can reconnect (not hang)."""
+    svc = BmsService(_fast_cfg(), mqtt_cfg)
+    svc._mqtt = MagicMock()
+    client = _FakeClient(connected=False, exc=BleakError("not connected"))
+
+    async def run():
+        svc._stop_event = asyncio.Event()
+        await asyncio.wait_for(svc._poll_loop(client), timeout=5.0)
+
+    asyncio.run(run())  # raises TimeoutError if the loop never bails out
+
+
+def test_poll_loop_returns_after_consecutive_failed_cycles(mqtt_cfg):
+    """Fix B: zombie link — is_connected stays True but every poll times out.
+    After N consecutive all-failed cycles, _poll_loop must give up and return
+    to force a fresh reconnect rather than spin forever."""
+    svc = BmsService(_fast_cfg(max_failed_cycles=3), mqtt_cfg)
+    svc._mqtt = MagicMock()
+    client = _FakeClient(connected=True, exc=TimeoutError("no response"))
+
+    async def run():
+        svc._stop_event = asyncio.Event()
+        await asyncio.wait_for(svc._poll_loop(client), timeout=5.0)
+
+    asyncio.run(run())

@@ -55,6 +55,7 @@ Daemon Python que reemplaza Solar Assistant en el sitio GADI. Despliegue en prod
 - **Identificación de puerto USB-Serial:** usar `/dev/serial/by-path/` (CH340 no tiene serial único, by-id es ambiguo). Cambio de cable a otro puerto USB = cambio de mapping. Si un poll falla todo, sospechar reordenamiento de puertos antes que bug.
 - **SMP roto en el OPi:** solo 1 de 4 cores activo (Allwinner H6 + kernel sunxi64). Sabido y aceptable; el daemon usa ~1% CPU.
 - **NFS no es paths de runtime:** este repo vive en NAS para edición desde DevClaude, pero el host de producción tiene su propio clone en `/opt/inverter-bridge` (o donde DEPLOYMENT.md lo ponga). No confundir.
+- **Reconexión BLE del BMS es auto-sanadora (desde 2026-06-09):** si el link BLE al Pack01 master se cae, `bms/service.py::_poll_loop` sale para que `_run_async` reconecte con backoff. Dos disparadores: desconexión explícita (`is_connected=False` → sale inmediato) y "link zombie" (todo da timeout pero `is_connected` sigue True → sale tras `bms.max_failed_cycles` ciclos, default 3). Antes de este fix el loop se tragaba el `"not connected"` y giraba para siempre sin reconectar (requería restart manual del daemon — caso real que tumbó el `sensor.gadi_battery_soc`).
 
 ## Referencias
 
