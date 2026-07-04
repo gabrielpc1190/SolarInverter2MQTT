@@ -43,6 +43,21 @@
 <h1>🔍 Revisión inverter-bridge — código + host</h1>
 <p class="sub">2026-07-04 · Auditoría del daemon en producción (GADI Orange Pi 3 LTS, 172.16.9.32) — solo hallazgos, <b>nada fue modificado</b>.</p>
 
+<div class="card" style="border-left:4px solid #1e7f4f;background:#f0f9f4">
+<p><b>✅ APLICADO (2026-07-04 ~15:15 CST, commit <code>1c3ecef</code>, desplegado y verificado en producción):</b>
+A1 (SIGTERM → shutdown limpio; probado: los Wh sobreviven al restart), A2 (DecodeError ya no tumba el BLE),
+M3 (contador CRC honesto — marcó 2 fallos reales en el primer minuto), M5 (persist BMS cada 30 s reales),
+M7 (logs + re-discovery en reconexión MQTT), M8 (password_file inexistente = error claro al arrancar),
+M1-mínimo (write_timeout serial), B1, B8, B9, <b>watchdog systemd activo</b> (Type=notify, 120 s) y
+<b>deploy nuevo por <code>tools/deploy.sh</code></b> (rsync por checksum — H3 cerrado).
+Host: 18 parches de seguridad + unattended-upgrades (H1), config 640 root:dialout (H4 — gotcha: systemd no
+aplicó los grupos suplementarios, el primer intento root:inverter-bridge falló), timezone CST, servicios
+Armbian colgantes deshabilitados (H2 — el load fantasma muere en el próximo reboot), respaldo diario de
+config+energía al NAS (H5). <b>Pendientes de backlog:</b> M2, M1-completo, M4, M6, B2-B7, H6 (journal
+persistente). ⚠️ El upgrade trajo <b>kernel nuevo 6.18.33</b> (corriendo aún 6.12.68) — el próximo reboot
+conviene hacerlo supervisado.</p>
+</div>
+
 <h2>Resumen ejecutivo</h2>
 <div class="card">
 <p><b>El sistema está fundamentalmente sano</b>: el servicio lleva 3.5 semanas corriendo sin caerse, usa 22 MB de RAM y ~1.4% de CPU, el journal tiene <b>1 solo warning en 7 días</b>, el auto-sanado BLE del 09-jun funciona (se le vio reconectar solo el 30-jun), y la persistencia de energía del lado inversores es atómica y a prueba de cortes.</p>
