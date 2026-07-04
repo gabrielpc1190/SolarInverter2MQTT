@@ -25,6 +25,7 @@ Spec references: §5.8 (sensor → register mapping, energy sensors) and
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import math
@@ -191,6 +192,7 @@ class EnergyIntegrator:
         payload: dict[str, object] = {"version": _PERSIST_VERSION}
         payload.update(self._wh)
 
+        tmp_path: Path | None = None
         try:
             self.persist_path.parent.mkdir(parents=True, exist_ok=True)
             # NamedTemporaryFile in the same dir guarantees the rename is atomic
@@ -203,16 +205,20 @@ class EnergyIntegrator:
                 delete=False,
                 encoding="utf-8",
             ) as tmp:
+                tmp_path = Path(tmp.name)
                 json.dump(payload, tmp)
                 tmp.flush()
                 os.fsync(tmp.fileno())
-                tmp_path = Path(tmp.name)
             os.replace(tmp_path, self.persist_path)
         except OSError:
             log.exception(
                 "energy_integrator: failed to persist accumulators to %s",
                 self.persist_path,
             )
+            # Don't leave unique-named orphans accumulating in /var/lib (B9).
+            if tmp_path is not None:
+                with contextlib.suppress(OSError):
+                    tmp_path.unlink(missing_ok=True)
 
     def load(self) -> None:
         """Restore accumulators from persist_path if it exists.

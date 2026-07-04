@@ -249,9 +249,35 @@ class MqttPublisher:
         self._client.will_set(
             self._availability_topic, payload="offline", qos=self.cfg.qos, retain=True
         )
+        # Reconnect visibility (M7): before these handlers a prolonged broker
+        # outage left zero trace in the journal, and discovery was only
+        # published once at startup (the BMS side already did this right).
+        self._client.on_connect = self._handle_connect
+        self._client.on_disconnect = self._handle_disconnect
         self._client.connect(self.cfg.host, self.cfg.port, keepalive=60)
         self._client.loop_start()
         self._connected = True
+
+    def _handle_connect(self, _client, _userdata, _flags, rc, _props=None) -> None:
+        """paho on_connect — fires on every (re)connection from the network
+        thread. Re-asserts retained discovery + availability=online so a broker
+        restart (which replayed our LWT 'offline') doesn't leave the inverter
+        entities dead in HA until the next daemon restart."""
+        if rc != 0:
+            log.error("MQTT (inverters) connect failed rc=%s", rc)
+            return
+        log.info(
+            "MQTT connected (inverters client_id=%s) — republishing discovery",
+            self.cfg.client_id,
+        )
+        try:
+            self.publish_discovery()
+            self.set_online()
+        except Exception:
+            log.exception("error republishing inverter discovery in on_connect")
+
+    def _handle_disconnect(self, _client, _userdata, _flags, rc, _props=None) -> None:
+        log.warning("MQTT (inverters) disconnected rc=%s — paho will auto-reconnect", rc)
 
     def disconnect(self) -> None:
         if not self._connected:

@@ -133,12 +133,23 @@ mqtt:
     assert cfg.inverters[0].slave == 1
 
 
-def test_load_example_config_in_repo():
-    """Verify that the shipped example YAML loads."""
+def test_load_example_config_in_repo(tmp_path):
+    """Verify that the shipped example YAML loads.
+
+    The example references /etc/inverter-bridge.secrets, which doesn't exist
+    on dev machines — and since audit fix M8 a missing password_file is a hard
+    error (it used to silently degrade to an empty password). So point it at a
+    real temp file before loading.
+    """
     example = Path(__file__).parent.parent / "config.example.yaml"
-    # The example references a non-existent password_file on this host;
-    # load_config will just leave password=""
-    cfg = load_config(example)
+    pw = tmp_path / "secrets"
+    pw.write_text("dummy")
+    patched = tmp_path / "config.yaml"
+    patched.write_text(
+        example.read_text().replace("/etc/inverter-bridge.secrets", str(pw))
+    )
+    cfg = load_config(patched)
     assert cfg.inverters[0].slave == 1
     assert cfg.inverters[1].slave == 2
     assert cfg.mqtt.topic_prefix == "gadi_inverters"
+    assert cfg.mqtt.password == "dummy"

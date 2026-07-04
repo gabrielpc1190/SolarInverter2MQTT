@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Revisión inverter-bridge — código + host (2026-07-04)</title>
+<style>
+  :root{
+    --bg:#f6f7f9; --card:#ffffff; --ink:#1c2530; --muted:#5b6675;
+    --line:#e3e7ec; --alta:#c0392b; --media:#b9770e; --baja:#5b6675; --ok:#1e7f4f;
+    --accent:#155e94;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font:15px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--ink);background:var(--bg);padding:24px}
+  main{max-width:960px;margin:0 auto}
+  h1{font-size:1.5rem;margin:0 0 4px}
+  h2{font-size:1.15rem;margin:34px 0 10px;border-bottom:2px solid var(--line);padding-bottom:6px}
+  h3{font-size:1rem;margin:22px 0 6px}
+  .sub{color:var(--muted);margin:0 0 22px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px 20px;margin:12px 0}
+  .finding{border-left:4px solid var(--baja)}
+  .alta{border-left-color:var(--alta)} .media{border-left-color:var(--media)} .buena{border-left-color:var(--ok)}
+  .tag{display:inline-block;font-size:.72rem;font-weight:700;letter-spacing:.05em;padding:2px 8px;border-radius:20px;color:#fff;vertical-align:2px;margin-right:8px}
+  .tag.alta{background:var(--alta)} .tag.media{background:var(--media)} .tag.baja{background:var(--baja)} .tag.ok{background:var(--ok)}
+  .finding h3{margin:0 0 6px}
+  .ref{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.82rem;color:var(--accent);background:#eef4f9;padding:1px 6px;border-radius:4px}
+  code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.85em;background:#eef1f4;padding:1px 5px;border-radius:4px}
+  table{border-collapse:collapse;width:100%;margin:10px 0}
+  th,td{border:1px solid var(--line);padding:7px 10px;text-align:left;vertical-align:top}
+  th{background:#eef1f4;font-size:.85rem}
+  .tablewrap{overflow-x:auto}
+  ul{margin:6px 0;padding-left:22px}
+  .kpi{display:flex;flex-wrap:wrap;gap:10px;margin:14px 0}
+  .kpi div{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 16px;flex:1 1 150px;min-width:140px}
+  .kpi b{display:block;font-size:1.25rem}
+  .kpi span{color:var(--muted);font-size:.82rem}
+  .plan li{margin:6px 0}
+  footer{color:var(--muted);font-size:.8rem;margin-top:40px;border-top:1px solid var(--line);padding-top:10px}
+</style>
+</head>
+<body>
+<main>
+<h1>🔍 Revisión inverter-bridge — código + host</h1>
+<p class="sub">2026-07-04 · Auditoría del daemon en producción (GADI Orange Pi 3 LTS, 172.16.9.32) — solo hallazgos, <b>nada fue modificado</b>.</p>
+
+<h2>Resumen ejecutivo</h2>
+<div class="card">
+<p><b>El sistema está fundamentalmente sano</b>: el servicio lleva 3.5 semanas corriendo sin caerse, usa 22 MB de RAM y ~1.4% de CPU, el journal tiene <b>1 solo warning en 7 días</b>, el auto-sanado BLE del 09-jun funciona (se le vio reconectar solo el 30-jun), y la persistencia de energía del lado inversores es atómica y a prueba de cortes.</p>
+<p>Dicho eso, la revisión encontró <b>2 problemas de severidad alta en el código</b> (ambos con fix pequeño), 8 medios, 9 menores, y <b>4 mejoras importantes en el host</b> — la más urgente: <b>no se aplican parches de seguridad desde el 20 de mayo</b> (18 paquetes pendientes, incluidos OpenSSL y Kerberos).</p>
+</div>
+<div class="kpi">
+  <div><b>2</b><span>hallazgos ALTOS (código)</span></div>
+  <div><b>8</b><span>medios (código)</span></div>
+  <div><b>9</b><span>bajos (código)</span></div>
+  <div><b>4</b><span>mejoras clave (host)</span></div>
+  <div><b>0</b><span>cambios aplicados hoy</span></div>
+</div>
+
+<h2>Parte 1 — Código (severidad ALTA)</h2>
+
+<div class="card finding alta">
+<h3><span class="tag alta">ALTA</span>A1 · Cada restart del servicio pierde energía acumulada (el apagado "limpio" nunca corre)</h3>
+<p><span class="ref">__main__.py:40-43</span> <span class="ref">daemon.py:115-136</span> <span class="ref">bms/service.py:99-114</span></p>
+<p>El daemon solo sabe apagarse limpio si lo interrumpen con Ctrl-C (SIGINT). Pero systemd — la única forma en que se detiene en producción — manda <b>SIGTERM</b>, y ante esa señal Python muere en el acto: el bloque final que guarda los contadores de energía a disco, cierra el BMS y desconecta MQTT <b>jamás se ejecuta</b>. Para colmo, el stop del BMS ni siquiera incluye guardar su energía.</p>
+<p><b>Consecuencia concreta:</b> cada <code>systemctl restart</code> (o sea, cada deploy) tira a la basura los Wh integrados desde el último guardado — hasta 60 s del lado inversores y varios minutos del lado BMS (ver M5). Los acumuladores del Energy Dashboard de HA quedan permanentemente sub-contados, un poquito con cada restart. Irónico: hay un test que valida el apagado limpio... por el camino que producción nunca usa.</p>
+<p><b>Fix:</b> ~15 líneas — un handler de SIGTERM que dispare el mismo camino que Ctrl-C, más un guardado de energía dentro del stop del BMS. Buen momento para de paso implementar el watchdog systemd que la unit tiene en TODO.</p>
+</div>
+
+<div class="card finding alta">
+<h3><span class="tag alta">ALTA</span>A2 · Una trama corrupta del BMS tumba la conexión Bluetooth entera</h3>
+<p><span class="ref">bms/service.py:287,309</span> <span class="ref">bms/ble_client.py:20-21,184-186</span></p>
+<p>El cliente BLE promete que los errores de CRC (basura por ruido de radio — algo <i>esperado</i> en Bluetooth) se reportan como <code>DecodeError</code> para que el que llama los cuente y siga. Pero el poll loop solo atrapa timeouts y errores Bleak: un <code>DecodeError</code> se le escapa, sube hasta el manejador general y fuerza una <b>desconexión + reconexión BLE completa</b> con backoff.</p>
+<p><b>Consecuencia:</b> justo el subsistema que ya dio guerra (el link al Pack01 que tumbó el SOC en junio) se expone a reconexiones innecesarias por simple ruido RF. Cada reconexión es una ventana de riesgo.</p>
+<p><b>Fix:</b> una línea por cada punto — agregar <code>DecodeError</code> a los errores que se cuentan como "ciclo fallido" sin desconectar.</p>
+</div>
+
+<h2>Parte 1 — Código (severidad MEDIA)</h2>
+
+<div class="card finding media">
+<h3><span class="tag media">MEDIA</span>M1 · Puerto serial atascado puede acumular trabajo sin límite y cruzar consultas</h3>
+<p><span class="ref">serial_io.py:107-120</span> <span class="ref">daemon.py:236-256</span></p>
+<p>El puerto se abre sin timeout de <i>escritura</i>: si el adaptador USB-serial se atasca, un write puede bloquear para siempre. Cuando un poll tarda demasiado, el daemon lo abandona pero <b>no lo cancela</b> — el siguiente ciclo encola otro, y como los 2 threads del pool son compartidos, pueden terminar dos consultas simultáneas sobre el <i>mismo</i> puerto (basura garantizada) o los dos threads atorados con el inversor 1 dejando al inversor 2 sano sin servicio.</p>
+<p><b>Fix mínimo:</b> <code>write_timeout</code> al abrir el puerto + no re-encolar para un inversor cuyo poll anterior no terminó. Tocarlo con calma: es el camino serial de producción.</p>
+</div>
+
+<div class="card finding media">
+<h3><span class="tag media">MEDIA</span>M2 · El "chatter" del LCD puede colarse como datos válidos</h3>
+<p><span class="ref">serial_io.py:132-134</span></p>
+<p>La pantalla LCD del inversor consulta el mismo bus (~3 tramas/s). Para decidir cuál respuesta es "la nuestra", el código toma la primera del esclavo correcto <b>con el tamaño esperado</b> — pero una respuesta Modbus no dice a qué registros corresponde, y hay bloques distintos con el mismo tamaño. Una respuesta del LCD a otro bloque puede atribuirse a nuestra consulta y publicarse como dato válido (el CRC no lo delata porque la trama es legítima, solo que de otra pregunta).</p>
+<p><b>Fix:</b> preferir la trama que llega después del eco de nuestro propio request, o validar plausibilidad por bloque. También amerita fixtures de capturas reales antes de desplegar.</p>
+</div>
+
+<div class="card finding media">
+<h3><span class="tag media">MEDIA</span>M3 · El contador de fallos CRC miente: siempre marca 0</h3>
+<p><span class="ref">daemon.py:297-301</span></p>
+<p>El sensor de diagnóstico <code>_meta/crc_fails_total</code> nunca cuenta fallos CRC reales: las tramas con CRC malo se descartan en silencio en el parser y terminan como timeout — que no toca el contador. Con ~16.7% de fallos en el inversor 1, el sensor que debería reflejarlo reporta cero. <b>Fix:</b> contar los CRC inválidos en el parser, o renombrar el sensor a lo que realmente mide.</p>
+</div>
+
+<div class="card finding media">
+<h3><span class="tag media">MEDIA</span>M4 · El marcador "inversor caído" existe a medias y HA nunca lo ve</h3>
+<p><span class="ref">daemon.py:253-255, 319-321</span></p>
+<p>Tras 3 ciclos fallidos se publica <code>"offline"</code>, pero: nunca se publica el <code>"online"</code> de recuperación, el tópico no tiene discovery (HA no crea la entidad) y el nombre queda fuera de la convención. Resultado: la funcionalidad es inerte. <b>Decidir:</b> cablearla completa o quitarla.</p>
+</div>
+
+<div class="card finding media">
+<h3><span class="tag media">MEDIA</span>M5 · El BMS guarda su energía "cuando pega" (lotería de segundos)</h3>
+<p><span class="ref">bms/service.py:424-426</span></p>
+<p>La condición de guardado es "si el segundo actual es divisible entre 30" evaluada una vez cada ~5-6 s: solo pega si el instante cae en la ventana justa. En la práctica guarda cada 2-3 minutos, y con mala suerte de fase, mucho menos. Combinado con A1, cada restart pierde esos minutos de Wh. <b>Fix:</b> 3 líneas — "si pasaron ≥30 s desde el último guardado".</p>
+</div>
+
+<div class="card finding media">
+<h3><span class="tag media">MEDIA</span>M6 · Un pack del BMS que deja de responder sigue "sumando" con datos congelados</h3>
+<p><span class="ref">bms/service.py:67, 277-278, 333, 408-426</span></p>
+<p>La última lectura de cada pack se cachea y nunca expira. Si un pack deja de responder mientras el resto sigue, su última corriente/voltaje se sigue sumando a la potencia del banco y a los acumuladores de energía <b>indefinidamente</b> — datos contaminados sin aviso. (Los contadores de parseo permiten detectarlo a mano, pero nada lo hace solo.) <b>Fix:</b> timestamp por pack y excluir lecturas más viejas que N ciclos.</p>
+</div>
+
+<div class="card finding media">
+<h3><span class="tag media">MEDIA</span>M7 · Si el broker MQTT se cae, el lado inversores no deja ni una línea de log</h3>
+<p><span class="ref">mqtt_publisher.py:247-284</span></p>
+<p>El publisher de inversores no tiene callbacks de conexión/desconexión ni chequea el resultado de publish: una caída prolongada del broker pasa invisible en el journal (los mensajes QoS 0 se pierden en silencio). El lado BMS sí lo hace bien — y un comentario afirma que el lado inversor "hace lo análogo", lo cual es falso. <b>Fix barato:</b> copiar el patrón del BMS (log + re-publicar discovery al reconectar).</p>
+</div>
+
+<div class="card finding media">
+<h3><span class="tag media">MEDIA</span>M8 · Si falta el archivo de contraseña MQTT, arranca con contraseña vacía en silencio</h3>
+<p><span class="ref">config.py:126-127</span></p>
+<p>Un typo en la ruta del <code>password_file</code> o un deploy fresco sin el archivo no da error: arranca con credencial vacía y el fallo aparece después como error de autenticación MQTT, lejos de la causa. <b>Fix:</b> error explícito al arrancar si el archivo no existe.</p>
+</div>
+
+<h2>Parte 1 — Código (severidad BAJA)</h2>
+<div class="card">
+<ul>
+<li><b>B1</b> · <span class="ref">serial_io.py:123-124</span> — deadline con reloj de pared: un salto de NTP hacia atrás estira la ventana de lectura. Usar <code>time.monotonic()</code> como ya hace el resto.</li>
+<li><b>B2</b> · <span class="ref">srne_map.py:50-57</span> — 6 bloques se leen del bus y se tiran (nadie los consume): ~6 consultas desperdiciadas por minuto en un bus ruidoso. Lo más valioso: el bloque de <b>códigos de falla del inversor se lee y nunca se publica</b> — alerting gratis dejado en la mesa. Podar o cablear.</li>
+<li><b>B3</b> · <span class="ref">modbus.py:68-100</span> — <code>parse_response()</code> es código muerto en producción (solo lo usan tests). Borrar o marcar como referencia.</li>
+<li><b>B4</b> · <span class="ref">daemon.py:186-188</span> — un sensor _meta publica un dict de Python crudo (no JSON) y sin discovery. Publicar JSON o un tópico por inversor.</li>
+<li><b>B5</b> · <span class="ref">daemon.py:249-251, 312-318</span> — el contador de fallos se incrementa dos veces en el camino de timeout: el umbral de 3 se alcanza antes de lo declarado.</li>
+<li><b>B6</b> · <span class="ref">aggregator.py:47-52</span> — con un solo inversor respondiendo, la potencia del banco pierde la mitad sin ningún marcador de calidad. Al menos loggearlo.</li>
+<li><b>B7</b> · <span class="ref">aggregator.py:81-84</span> — se publican tópicos de potencia aparente L1/L2 que no tienen discovery: HA nunca los ve.</li>
+<li><b>B8</b> · <span class="ref">config.py:185-186</span> vs <span class="ref">ble_client.py:180-192</span> — la config acepta hasta 16 packs pero el cliente BLE revienta con más de 4 (y ese error causaría loop de reconexión infinito). Alinear el rango a 1..4.</li>
+<li><b>B9</b> · <span class="ref">energy_integrator.py:198-215</span> — si el guardado falla a medias (disco lleno) quedan archivos temporales huérfanos acumulándose; y el guardado del lado BMS no hace fsync (ventana de pérdida en corte de energía — queda el archivo viejo, no corrupto; más débil que el lado inversor).</li>
+</ul>
+</div>
+
+<h2>Parte 1 — Huecos de cobertura de tests</h2>
+<div class="card">
+<ul>
+<li><b><code>SerialPort.query()</code> no tiene ni un test</b> — es el código más delicado del bus (matching de respuestas, exception frames, timeouts) y el único módulo de I/O sin mock. Habría cazado M2.</li>
+<li><b>Energía del BMS sin tests</b>: integración, guardado y carga — cero cobertura.</li>
+<li><b>Frame corrupto en el poll loop BLE</b> — un test así habría cazado A2.</li>
+<li><b>Apagado por señal</b>: el test usa Ctrl-C; nada valida SIGTERM (habría cazado A1).</li>
+<li><b>Consistencia del contrato MQTT</b>: falta un test "todo tópico publicado tiene discovery y viceversa" — habría cazado M4, B4 y B7, y protege el contrato con HA que el CLAUDE.md declara crítico.</li>
+</ul>
+</div>
+
+<h2>Parte 1 — Lo que está bien</h2>
+<div class="card finding buena">
+<p><span class="tag ok">BIEN</span>Persistencia atómica del integrador (tmp + fsync + rename — un corte de luz no corrompe), tope defensivo del tiempo transcurrido (a prueba de saltos NTP), filtro de valores basura del bus, locking correcto de contadores, el fix de reconexión BLE del 09-jun bien implementado <i>y testeado</i>, validación CRC estricta en ambos protocolos, availability LWT bien montada, y ~200 tests que corren en &lt;3 s.</p>
+</div>
+
+<h2>Parte 2 — Host (Orange Pi 3 LTS)</h2>
+
+<div class="card finding alta">
+<h3><span class="tag alta">ALTA</span>H1 · Sin parches de seguridad desde el 20 de mayo</h3>
+<p>El último <code>apt update</code> era del 20-may (7 semanas) y <code>unattended-upgrades</code> no está instalado. Al refrescar hoy: <b>18 paquetes pendientes</b>, la mayoría de <code>stable-security</code> — incluidos <b>OpenSSL, Kerberos (krb5), libssh2 y rsync</b>. La máquina está solo en LAN IoT con SSH por llave, así que el riesgo es moderado, pero un daemon de producción 24/7 no debería quedarse sin parches por descuido.</p>
+<p><b>Propuesta:</b> aplicar los 18 ahora (ventana de ~2 min, el daemon no depende de ninguno) e instalar <code>unattended-upgrades</code> limitado a security para que no vuelva a pasar.</p>
+</div>
+
+<div class="card finding media">
+<h3><span class="tag media">MEDIA</span>H2 · Load average 2.2 permanente… fantasma (procesos zombis del boot)</h3>
+<p>El load de 2.2 con la CPU 98% ociosa lo causan <b>dos procesos atascados en estado D desde el boot del 20-may</b>: un <code>lscpu</code> y un <code>grep</code> lanzados por los scripts de Armbian (<code>armbian-hardware-monitor</code> / <code>armbian-hardware-optimization</code>) que se colgaron para siempre leyendo el sysfs de cpufreq — otra cara del SMP roto (1 de 4 cores) ya conocido. No consumen nada, pero <b>inflan el load en +2.0 fijo</b>, lo que inutiliza cualquier monitoreo de carga del host.</p>
+<p><b>Propuesta:</b> en el próximo reboot se limpian solos, pero casi seguro se vuelven a colgar al arrancar. La cura durable es deshabilitar esos dos servicios de Armbian (con 1 core y cpufreq roto no aportan nada) o probar si el SMP quedó arreglado en un kernel más nuevo.</p>
+</div>
+
+<div class="card finding media">
+<h3><span class="tag media">MEDIA</span>H3 · Deriva entre el repo y lo desplegado (riesgo del flujo scp manual)</h3>
+<p>Comparé por checksum todo el código del repo contra el OPi: <b>2 archivos difieren</b> — <code>mqtt_publisher.py</code> (el OPi tiene la versión anterior al rename de tópicos del 03-jun; por suerte las diferencias son solo docstrings, el prefijo real viene del config) y <code>bms/ble_client.py</code> (diferencias cosméticas de estilo, funcionalmente idéntico en Python 3.13). <b>Hoy es inofensivo, pero demuestra que el flujo "scp a mano de los archivos que me acuerdo" ya derivó</b> — la próxima vez puede ser con algo funcional.</p>
+<p><b>Propuesta:</b> re-sincronizar los 2 archivos (riesgo cero) y adoptar un mini-script de deploy con <code>rsync -c</code> (checksum) que copie exactamente lo que difiere, en vez de scp por lista manual.</p>
+</div>
+
+<div class="card finding media">
+<h3><span class="tag media">MEDIA</span>H4 · Config con contraseña MQTT legible por cualquier usuario del sistema</h3>
+<p><code>/etc/inverter-bridge.yaml</code> está en permisos 644 (legible por todos) y contiene la credencial MQTT. En una máquina mono-propósito el riesgo es bajo, pero el fix cuesta un comando: <code>chown root:inverter-bridge</code> + <code>chmod 640</code> (el servicio corre como ese usuario y sigue leyéndolo).</p>
+</div>
+
+<div class="card finding media">
+<h3><span class="tag media">MEDIA</span>H5 · Sin respaldo del config ni de los contadores de energía</h3>
+<p>Ni <code>/etc/inverter-bridge.yaml</code> ni <code>/var/lib/inverter-bridge/*.json</code> (los acumuladores Wh) tienen copia fuera del OPi. Si la microSD/eMMC muere, el código se recupera de GitHub pero el config habría que reconstruirlo y los contadores de energía se pierden (reseteo del Energy Dashboard). <b>Propuesta:</b> un cron sencillo que copie esos ~3 archivos al NAS (o al vault el config) una vez al día.</p>
+</div>
+
+<div class="card finding">
+<h3><span class="tag baja">BAJA</span>H6 · Logs volátiles: tras un crash + reboot no habrá forense</h3>
+<p><code>/var/log</code> vive en zram (RAM comprimida, diseño de Armbian para cuidar la eMMC) y el journal está capado a 20 MB: un reboot borra toda la evidencia. Con la eMMC al 0-10% de desgaste hay margen de sobra para <code>Storage=persistent</code> con un cap modesto (50-100 MB) y no quedarse ciego después de un incidente.</p>
+</div>
+
+<div class="card finding">
+<h3><span class="tag baja">BAJA</span>H7 · Menores</h3>
+<ul>
+<li><b>Watchdog systemd pendiente</b> — la unit tiene el TODO anotado (falta sd_notify en el daemon). Se conecta natural con el fix A1: mismo PR.</li>
+<li><b>Zona horaria en UTC</b> — opcional ponerla en <code>America/Costa_Rica</code> para leer el journal directo en CST.</li>
+<li><b>La unit ya tiene hardening decente</b> (ProtectSystem=strict, NoNewPrivileges, PrivateTmp…) — se podría sumar <code>CapabilityBoundingSet=</code> y <code>MemoryMax</code>, pero es pulido, no urgencia.</li>
+</ul>
+</div>
+
+<h2>Parte 2 — Lo que está bien en el host</h2>
+<div class="card finding buena">
+<p><span class="tag ok">BIEN</span>Servicio estable 3.5 semanas (22 MB RAM, ~1.4% CPU) · eMMC con 0-10% de desgaste y Pre-EOL normal · 51°C · disco al 22% · RAM sobrada (231 MB de 1.9 GB) · WiFi excelente (−40 dBm a GADI_IoT — sobrevivió sin pestañear el cambio de canal del AP de hoy) · SSH solo-llave verificado efectivo · NTP sincronizado · journal limpísimo (1 warning en 7 días, 0 errores) · unit systemd con hardening real · el auto-sanado BLE del 09-jun visto funcionando en vivo el 30-jun.</p>
+</div>
+
+<h2>Plan de ataque sugerido</h2>
+<div class="card">
+<ol class="plan">
+<li><b>A1 + M5 + watchdog</b> (una sola tanda, ~30 líneas + tests): handler SIGTERM, guardado de energía en el stop del BMS, guardado cada-30s real, y sd_notify para habilitar <code>WatchdogSec</code>. Es lo que más "sangra" (energía perdida en cada restart).</li>
+<li><b>A2</b> (2 líneas): DecodeError contado sin desconectar. Estabilidad BLE.</li>
+<li><b>H1</b>: parches de seguridad + unattended-upgrades en el OPi (ventana de minutos).</li>
+<li><b>H3 + H4</b>: re-sync de los 2 archivos derivados, permisos del config, y script de deploy con rsync.</li>
+<li><b>M3, M7, M8</b> (pequeños, bajo riesgo): contador CRC honesto, logs de reconexión MQTT, error explícito si falta el password file.</li>
+<li><b>M6 + M4 + B2</b>: expirar packs congelados, decidir el destino del marcador offline, y cablear los códigos de falla del inversor (alerting gratis).</li>
+<li><b>M1 + M2 con calma</b>: tocan el path serial de producción — primero fixtures de capturas reales, después el fix, después deploy.</li>
+<li><b>H5 + H6</b>: cron de respaldo al NAS y journal persistente.</li>
+</ol>
+</div>
+
+<footer>Generado por Claude · 2026-07-04 ~14:40 CST · Revisión de solo lectura: ningún cambio aplicado al repo ni al host. Código auditado: 18 módulos (~3.400 líneas) + tests + unit systemd. Host: Armbian 26.2.1 trixie, kernel 6.12.68-sunxi64, uptime 45 días.</footer>
+</main>
+</body>
+</html>

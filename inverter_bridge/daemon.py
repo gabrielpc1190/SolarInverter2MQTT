@@ -25,6 +25,7 @@ from .energy_integrator import EnergyIntegrator
 from .modbus import ModbusException
 from .mqtt_publisher import MqttPublisher
 from .parsers import ParsedBlock, parse_block
+from .sdnotify import sd_notify
 from .serial_io import SerialPort
 from .srne_map import BLOCKS, BlockTier
 
@@ -57,7 +58,13 @@ class Daemon:
         """
         self.cfg = cfg
         self.ports: dict[str, SerialPort] = {
-            i.name: serial_factory(device=i.port, timeout_s=cfg.polling.serial_timeout_s)
+            i.name: serial_factory(
+                device=i.port,
+                timeout_s=cfg.polling.serial_timeout_s,
+                # Real CRC failures are counted where they're detected (the
+                # stream parser) so `_meta/crc_fails_total` is honest (M3).
+                on_crc_error=self._count_crc_error,
+            )
             for i in cfg.inverters
         }
         self.publisher = publisher_factory(cfg.mqtt, n_inverters=len(cfg.inverters))
@@ -101,8 +108,18 @@ class Daemon:
 
     # ----- lifecycle -----
 
+    def _count_crc_error(self) -> None:
+        """Callback from SerialPort's stream parser: one bad-CRC frame seen."""
+        with self._fail_count_lock:
+            self._crc_fails_total += 1
+
     def start(self) -> None:
-        """Run forever. Returns only via KeyboardInterrupt or fatal error."""
+        """Run forever. Returns only via KeyboardInterrupt or fatal error.
+
+        SIGTERM (systemd stop/restart) is translated to KeyboardInterrupt by
+        `__main__.install_signal_handlers`, so the finally block below runs in
+        production too — not just on Ctrl-C (A1).
+        """
         self.publisher.connect()
         self.publisher.publish_discovery()
         self.publisher.set_online()
@@ -112,6 +129,7 @@ class Daemon:
             except Exception:
                 log.exception("BMS service failed to start; continuando solo con inversores")
                 self._bms_service = None
+        sd_notify("READY=1")
         try:
             self._loop_forever()
         finally:
@@ -142,6 +160,10 @@ class Daemon:
         # cold-block polling on the noisy inv1 bus).
         last_cold = time.monotonic()
         while True:
+            # systemd watchdog heartbeat (WatchdogSec in the unit): if this
+            # loop ever wedges (e.g. a stuck serial write pre-write_timeout),
+            # systemd restarts the daemon instead of it hanging silently.
+            sd_notify("WATCHDOG=1")
             cycle_start = time.monotonic()
             try:
                 self.run_one_hot_cycle()
@@ -295,9 +317,10 @@ class Daemon:
                         inv.name, block.addr, attempt + 1, e,
                     )
                 except Exception:
+                    # (M3: this used to bump _crc_fails_total, which made the
+                    # counter a misnomer — real CRC failures are now counted in
+                    # the stream parser via _count_crc_error.)
                     log.exception("inv %s block 0x%04x unexpected error", inv.name, block.addr)
-                    with self._fail_count_lock:
-                        self._crc_fails_total += 1
                     break
             if frame is not None:
                 try:

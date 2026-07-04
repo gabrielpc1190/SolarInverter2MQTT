@@ -4,11 +4,27 @@ from __future__ import annotations
 
 import argparse
 import logging
+import signal
 import sys
 from pathlib import Path
 
 from .config import load_config
 from .daemon import Daemon
+
+
+def _sigterm_handler(signum, frame):
+    raise KeyboardInterrupt
+
+
+def install_signal_handlers() -> None:
+    """Translate SIGTERM (what systemd sends on stop/restart) into
+    KeyboardInterrupt so Daemon.start()'s finally block runs: persist energy,
+    stop the BMS service, publish availability=offline, drain the executor.
+
+    Without this, every `systemctl restart` killed the process on the spot
+    and lost the energy integrated since the last periodic save (audit A1).
+    """
+    signal.signal(signal.SIGTERM, _sigterm_handler)
 
 
 def main() -> int:
@@ -37,6 +53,7 @@ def main() -> int:
         format="%(asctime)s %(levelname)-7s %(name)s :: %(message)s",
     )
 
+    install_signal_handlers()
     try:
         Daemon(cfg).start()
     except KeyboardInterrupt:

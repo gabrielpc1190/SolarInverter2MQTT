@@ -25,13 +25,21 @@ from .modbus import FC_READ_HOLDING, ModbusException, ModbusFrame, build_read_ho
 log = logging.getLogger(__name__)
 
 
-def parse_frame_stream(stream: bytes) -> list[ModbusFrame]:
+def parse_frame_stream(
+    stream: bytes, on_crc_error=None
+) -> list[ModbusFrame]:
     """Walk `stream`, extract every read-holding-response frame with valid CRC.
 
     Skips:
         - Bytes that don't start a recognizable frame
         - Exception frames (those are surfaced via `SerialPort.query()` only)
         - Modbus REQUEST frames (they have a CRC too, but no register payload)
+
+    Args:
+        on_crc_error: optional zero-arg callback invoked once per plausible
+            response frame (valid header + full length) whose CRC check fails —
+            feeds the real `_meta/crc_fails_total` diagnostic (audit M3; these
+            used to be dropped silently and the counter never moved).
 
     Returns successful response frames in the order found.
     """
@@ -58,6 +66,15 @@ def parse_frame_stream(stream: bytes) -> list[ModbusFrame]:
                         frames.append(ModbusFrame(slave=slave, func=func, regs=regs))
                         i += total
                         continue
+                    # A REQUEST frame (ours echoed, or LCD chatter) with an even
+                    # addr-high byte also lands here and fails the response-CRC —
+                    # don't count it as corruption if it validates as a request
+                    # (the request branch below will consume it).
+                    is_valid_request = (
+                        i + 8 <= n and crc16(stream[i : i + 6]) == stream[i + 6 : i + 8]
+                    )
+                    if on_crc_error is not None and not is_valid_request:
+                        on_crc_error()
         # Try as request: slave fc addr(2) count(2) crc(2) = 8 bytes
         if func == FC_READ_HOLDING and i + 8 <= n:
             req = stream[i : i + 8]
@@ -89,6 +106,7 @@ class SerialPort:
         parity: str = "N",
         stopbits: int = 1,
         timeout_s: float = 1.5,
+        on_crc_error=None,
     ) -> None:
         self.device = device
         self.baud = baud
@@ -96,6 +114,7 @@ class SerialPort:
         self.parity = parity
         self.stopbits = stopbits
         self.timeout_s = timeout_s
+        self.on_crc_error = on_crc_error
 
     def query(self, slave: int, addr: int, count: int) -> ModbusFrame:
         """Send a read-holding-regs request and return the matching response.
@@ -111,6 +130,9 @@ class SerialPort:
             self.parity,
             self.stopbits,
             timeout=self.timeout_s,
+            # Without write_timeout, a wedged USB-serial driver can block
+            # write()/flush() forever (reads time out; writes didn't) — M1.
+            write_timeout=self.timeout_s,
         )
         try:
             s.reset_input_buffer()
@@ -120,8 +142,9 @@ class SerialPort:
             s.flush()
             expected = 5 + 2 * count
             buf = b""
-            deadline = time.time() + self.timeout_s
-            while time.time() < deadline and len(buf) < expected + 32:
+            # monotonic: an NTP step must not stretch/shrink the read window (B1)
+            deadline = time.monotonic() + self.timeout_s
+            while time.monotonic() < deadline and len(buf) < expected + 32:
                 chunk = s.read(expected + 32 - len(buf))
                 if not chunk:
                     break
@@ -129,7 +152,7 @@ class SerialPort:
         finally:
             s.close()
         # Pull our response from the buffer (ignoring LCD-injected traffic)
-        for f in parse_frame_stream(buf):
+        for f in parse_frame_stream(buf, on_crc_error=self.on_crc_error):
             if f.slave == slave and len(f.regs) == count:
                 return f
         # Look for an exception frame matching our slave

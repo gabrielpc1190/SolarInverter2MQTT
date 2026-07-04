@@ -123,8 +123,14 @@ def load_config(path: Path) -> BridgeConfig:
         inverters.append(InverterCfg(name=entry["name"], port=entry["port"], slave=slave))
 
     mq = data["mqtt"]
+    # Fail loudly at load time (M8): a typo'd path used to silently degrade to
+    # an empty password, surfacing later as an MQTT auth error far from the cause.
+    if "password_file" not in mq:
+        raise ValueError("config missing 'mqtt.password_file'")
     pw_file = Path(mq["password_file"])
-    password = pw_file.read_text().strip() if pw_file.exists() else ""
+    if not pw_file.exists():
+        raise ValueError(f"mqtt.password_file does not exist: {pw_file}")
+    password = pw_file.read_text().strip()
     mqtt = MqttCfg(
         host=mq["host"],
         username=mq["username"],
@@ -182,7 +188,10 @@ def load_config(path: Path) -> BridgeConfig:
     if bms.enabled:
         if not bms.master_mac:
             raise ValueError("bms.enabled=true requires bms.master_mac to be set")
-        if not (1 <= bms.pack_count <= 16):
-            raise ValueError(f"bms.pack_count {bms.pack_count} out of range 1..16")
+        # 1..4: the Octopus BLE client and the discovery catalog support at
+        # most 4 packs behind the master; >4 would ValueError at poll time and
+        # loop the reconnect forever (B8).
+        if not (1 <= bms.pack_count <= 4):
+            raise ValueError(f"bms.pack_count {bms.pack_count} out of range 1..4")
 
     return BridgeConfig(inverters=inverters, mqtt=mqtt, polling=polling, logging=logging_cfg, bms=bms)

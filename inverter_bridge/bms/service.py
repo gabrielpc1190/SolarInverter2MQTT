@@ -19,8 +19,10 @@ Lifecycle desde el daemon:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
+import os
 import threading
 import time
 from pathlib import Path
@@ -39,7 +41,7 @@ from .discovery import (
     discovery_topic_for,
     state_topic_for,
 )
-from .octopus_protocol import PiaData, PibData
+from .octopus_protocol import DecodeError, PiaData, PibData
 
 log = logging.getLogger(__name__)
 
@@ -73,6 +75,9 @@ class BmsService:
         self._energy_out_Wh: float = 0.0
         self._energy_persist = Path(bms_cfg.energy_persist_path)
         self._last_energy_sample_t: float | None = None
+        # Última persistencia a disco (monotonic). El persist es time-based:
+        # "≥30 s desde el último save", no la lotería de int(now) % 30 == 0.
+        self._last_energy_save_t: float = time.monotonic()
 
         # Telemetry: counter de parses exitosos (PIA + PIB). Incrementa cada
         # decode OK; expuesto como diagnostic para watchdog en HA.
@@ -104,6 +109,9 @@ class BmsService:
             # Programar cancellation desde fuera del loop
             self._loop.call_soon_threadsafe(self._stop_event.set)
         self._thread.join(timeout=timeout_s)
+        # Persistir energía acumulada: sin esto, cada restart del daemon tira
+        # los Wh integrados desde el último save periódico (audit A1).
+        self._save_energy_state()
         if self._mqtt is not None:
             try:
                 self._mqtt.publish(self._availability_topic, "offline", qos=0, retain=True)
@@ -131,6 +139,10 @@ class BmsService:
             log.info("Energy state file no existe (%s). Empiezo en 0.", self._energy_persist)
 
     def _save_energy_state(self) -> None:
+        # Atómico y durable: tmp + fsync + rename (mismo patrón que el
+        # EnergyIntegrator del lado inversores). Sin fsync, un corte de
+        # energía justo después del rename puede dejar el archivo vacío.
+        tmp = self._energy_persist.with_suffix(".json.tmp")
         try:
             self._energy_persist.parent.mkdir(parents=True, exist_ok=True)
             data = {
@@ -138,11 +150,15 @@ class BmsService:
                 "energy_out_Wh": self._energy_out_Wh,
                 "saved_at_unix": time.time(),
             }
-            tmp = self._energy_persist.with_suffix(".json.tmp")
-            tmp.write_text(json.dumps(data))
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(data, f)
+                f.flush()
+                os.fsync(f.fileno())
             tmp.replace(self._energy_persist)
         except Exception as e:
             log.warning("Error guardando energy state: %s", e)
+            with contextlib.suppress(OSError):
+                tmp.unlink(missing_ok=True)
 
     # ───── MQTT ───────────────────────────────────────────────────
 
@@ -284,7 +300,10 @@ class BmsService:
                         pack, pia.voltage_V, pia.current_A, pia.soc_pct,
                     )
                     self._publish_pia_state(pia)
-                except (TimeoutError, BleakError) as e:
+                except (TimeoutError, BleakError, DecodeError) as e:
+                    # DecodeError (CRC malo por ruido RF) es un evento esperado
+                    # en BLE: cuenta como poll fallido, NO tumba la conexión
+                    # (audit A2 — antes escapaba y forzaba reconexión completa).
                     log.warning("PIA pack=%d FAIL: %s", pack, e)
                     # Si el link BLE se cayó, no tiene sentido seguir polleando
                     # un cliente muerto: salimos para que _run_async reconecte.
@@ -306,7 +325,7 @@ class BmsService:
                         self._parses_by_pack[pack] = self._parses_by_pack.get(pack, 0) + 1
                         cycle_ok += 1
                         self._publish_pib_state(pib)
-                    except (TimeoutError, BleakError) as e:
+                    except (TimeoutError, BleakError, DecodeError) as e:
                         log.warning("PIB pack=%d FAIL: %s", pack, e)
                         if not client.is_connected:
                             log.warning("BLE desconectado (PIB pack=%d) — saliendo del poll loop para reconectar", pack)
@@ -421,6 +440,9 @@ class BmsService:
             self._energy_out_Wh += agg.power_discharging_W * dt_h
         self._pub("bluesun_battery_energy_in", self._energy_in_Wh)
         self._pub("bluesun_battery_energy_out", self._energy_out_Wh)
-        # Persist cada N samples (cada ciclo es ~5s; persistir cada ~30s)
-        if int(now) % 30 == 0:
+        # Persist time-based: cada ≥30 s reales desde el último save (audit M5 —
+        # el int(now) % 30 == 0 anterior solo pegaba si el instante caía en la
+        # ventana de 1 s, en la práctica cada 2-3 min o peor).
+        if now - self._last_energy_save_t >= 30.0:
             self._save_energy_state()
+            self._last_energy_save_t = now
