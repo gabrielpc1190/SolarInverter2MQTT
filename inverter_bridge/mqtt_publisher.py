@@ -76,6 +76,8 @@ PER_INVERTER_SENSORS: dict[str, tuple[str, str | None, str | None]] = {
     "load_power_l1":            ("W",   "power",         "measurement"),
     "load_power_l2":            ("W",   "power",         "measurement"),
     "load_apparent_power":      ("VA",  "apparent_power","measurement"),
+    "load_apparent_power_l1":   ("VA",  "apparent_power","measurement"),
+    "load_apparent_power_l2":   ("VA",  "apparent_power","measurement"),
     "load_percentage":          ("%",   None,            "measurement"),
     "ac_output_voltage":        ("V",   "voltage",       "measurement"),
     "ac_output_frequency":      ("Hz",  "frequency",     "measurement"),
@@ -112,6 +114,12 @@ PER_INVERTER_SENSORS: dict[str, tuple[str, str | None, str | None]] = {
     # Diagnostic (per-inverter, from 0x0014 device_info cold block).
     "firmware_version":         ("",    None,            None),
     "hardware_version":         ("",    None,            None),
+    # Per-inverter reachability marker (M4) — "online"/"offline", published
+    # every cycle by the daemon; offline after 3 consecutive failed cycles.
+    "status":                   ("",    None,            None),
+    # Raw fault registers 0x0204..0x0209 as hex words (B2, cold cycle).
+    # All-zeros = no faults; alert in HA on anything else.
+    "fault_bits":               ("",    None,            None),
 }
 
 # Energy accumulators (F-2 discovery). Values are produced by the
@@ -131,6 +139,8 @@ ENERGY_SENSORS: dict[str, tuple[str, str | None, str | None]] = {
 # not under `total/`. unique_id is `meta_<key>` (slash replaced).
 META_SENSORS: dict[str, tuple[str, str | None, str | None]] = {
     "_meta/poll_duration_ms":  ("ms", None,       "measurement"),
+    # JSON dict {inv_name: ms} — per-inverter split of poll_duration (B4).
+    "_meta/poll_duration_per_inverter_ms": ("", None, None),
     "_meta/crc_fails_total":   ("",   None,       "total_increasing"),
     "_meta/uptime_s":          ("s",  "duration", "total_increasing"),
 }

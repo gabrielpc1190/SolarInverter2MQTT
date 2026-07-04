@@ -68,6 +68,12 @@ class BmsService:
         # State cache: ultima lectura por pack para agregar cuando PIB llega entre PIAs
         self._pia_state: dict[int, PiaData] = {}
         self._pib_state: dict[int, PibData] = {}
+        # Timestamp (monotonic) de la última lectura OK por pack. Un pack que
+        # deja de responder EXPIRA de los agregados en vez de seguir sumando su
+        # última corriente/voltaje congelados para siempre (audit M6).
+        self._pia_seen_t: dict[int, float] = {}
+        self._pib_seen_t: dict[int, float] = {}
+        self._stale_warned: set[int] = set()
 
         # Energy integrators (Wh acumulado). Seed desde HA REST al iniciar (TODO en v2);
         # por ahora fallback a persistencia local o cero.
@@ -292,6 +298,10 @@ class BmsService:
                 try:
                     pia = await client.poll_pia(pack)
                     self._pia_state[pack] = pia
+                    self._pia_seen_t[pack] = time.monotonic()
+                    if pack in self._stale_warned:
+                        self._stale_warned.discard(pack)
+                        log.info("pack %d volvió a responder — re-incluido en agregados", pack)
                     self._parses_ok += 1
                     self._parses_by_pack[pack] = self._parses_by_pack.get(pack, 0) + 1
                     cycle_ok += 1
@@ -321,6 +331,7 @@ class BmsService:
                     try:
                         pib = await client.poll_pib(pack)
                         self._pib_state[pack] = pib
+                        self._pib_seen_t[pack] = time.monotonic()
                         self._parses_ok += 1
                         self._parses_by_pack[pack] = self._parses_by_pack.get(pack, 0) + 1
                         cycle_ok += 1
@@ -348,8 +359,8 @@ class BmsService:
             else:
                 failed_cycles = 0
 
-            # Aggregate + publish bank-level
-            agg = aggregate_bank(self._pia_state, self._pib_state)
+            # Aggregate + publish bank-level (solo packs con lecturas frescas — M6)
+            agg = aggregate_bank(*self._fresh_states())
             self._publish_bank_state(agg)
 
             # Energy integration
@@ -369,6 +380,35 @@ class BmsService:
                     return
                 except TimeoutError:
                     pass
+
+    def _fresh_states(self) -> tuple[dict[int, PiaData], dict[int, PibData]]:
+        """Filtra los caches por-pack a solo lecturas frescas (audit M6).
+
+        PIA expira a `stale_pack_timeout_s` (default 60 s ≈ 10+ ciclos fast
+        perdidos); PIB expira a 2x su intervalo lento. Un pack congelado se
+        loguea UNA vez al expirar y de nuevo al volver.
+        """
+        now = time.monotonic()
+        pia_cutoff = self.bms_cfg.stale_pack_timeout_s
+        pib_cutoff = 2 * self.bms_cfg.poll_slow_interval_s
+        fresh_pia: dict[int, PiaData] = {}
+        for pack, data in self._pia_state.items():
+            age = now - self._pia_seen_t.get(pack, 0.0)
+            if age <= pia_cutoff:
+                fresh_pia[pack] = data
+            elif pack not in self._stale_warned:
+                self._stale_warned.add(pack)
+                log.warning(
+                    "pack %d sin responder hace %.0f s — EXCLUIDO de los agregados "
+                    "del banco (su última lectura ya no es confiable)",
+                    pack, age,
+                )
+        fresh_pib = {
+            pack: data
+            for pack, data in self._pib_state.items()
+            if now - self._pib_seen_t.get(pack, 0.0) <= pib_cutoff
+        }
+        return fresh_pia, fresh_pib
 
     # ───── Publishing helpers ─────────────────────────────────────
 

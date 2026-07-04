@@ -206,6 +206,15 @@ def aggregate_inverters(
             for k in diag_keys:
                 if k in info.fields:
                     out[f"inverter_{i}_{k}"] = info.fields[k]
+        # Fault registers 0x0204..0x0209 (B2): published as raw hex words so HA
+        # can alert on anything non-zero. No per-bit decoding on purpose — the
+        # register map rule forbids interpreting without a real capture of a
+        # fault event; the raw value is still enough to alarm + diagnose.
+        faults = inv.get("faults")
+        if faults is not None:
+            out[f"inverter_{i}_fault_bits"] = " ".join(
+                f"{r:04X}" for r in faults.regs_raw
+            )
     for k, total in daily_sums.items():
         out[k] = round(total, 2)
 

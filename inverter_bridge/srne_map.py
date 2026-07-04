@@ -48,15 +48,14 @@ BLOCKS: list[Block] = [
     Block(0x0223, 23, "phase_b",       BlockTier.HOT),  # Inverter/load phase B (L2). Renamed 2026-05-21 from "pv_temps_l2" — none of the offsets were actually PV per V1.96 spec.
     # Cold — polled every 60 s
     Block(0x0014, 10, "device_info",   BlockTier.COLD),
-    Block(0x0020, 16, "fw_build_date", BlockTier.COLD),  # ASCII "Apr 18 2025 09:27:26"
-    Block(0x0030, 16, "fw_model",      BlockTier.COLD),  # ASCII "SR-24031501..."
-    Block(0x0040, 8,  "fw_serial",     BlockTier.COLD),  # ASCII continuation
     Block(0x010F, 3,  "pv2",           BlockTier.HOT),  # PV2 V/I/P per V1.96 spec (NOT BMS as previously mislabeled). Promoted to HOT so PV2 readings refresh every 3s.
-    Block(0x0204, 6,  "faults",        BlockTier.COLD),
-    Block(0xE116, 11, "config",        BlockTier.COLD),
-    Block(0xE000, 8,  "thresholds",    BlockTier.COLD),
+    Block(0x0204, 6,  "faults",        BlockTier.COLD),  # raw hex published as inverter_N_fault_bits (B2)
     Block(0xF000, 8,  "runtime_ctrs",  BlockTier.COLD),
     Block(0xF02C, 18, "daily_stats",   BlockTier.COLD),
+    # Pruned 2026-07-04 (audit B2) — polled every 60 s with retries on a noisy
+    # bus and nobody consumed them: fw_build_date (0x0020, ASCII),
+    # fw_model (0x0030, ASCII), fw_serial (0x0040, ASCII), config (0xE116),
+    # thresholds (0xE000). Re-add here (with a consumer!) if ever needed.
 ]
 
 

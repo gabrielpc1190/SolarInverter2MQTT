@@ -466,3 +466,234 @@ def test_daemon_loop_sends_watchdog_ping(bridge_cfg, monkeypatch):
     with pytest.raises(KeyboardInterrupt):
         d._loop_forever()
     assert "WATCHDOG=1" in pings
+
+
+# ═════════════════ Ronda 2 (backlog de la auditoría) ═════════════════
+
+
+def _pia(pack: int, current_A: float = 1.0):
+    from inverter_bridge.bms.octopus_protocol import PiaData
+
+    return PiaData(
+        pack=pack,
+        voltage_V=53.0,
+        current_A=current_A,
+        remaining_Ah=100.0,
+        nominal_Ah=100.0,
+        soc_pct=50.0,
+        soh_pct=100.0,
+        cycles=10,
+    )
+
+
+# ───── M6: packs congelados no siguen sumando ─────
+
+
+def test_fresh_states_excludes_frozen_packs(mqtt_cfg, monkeypatch):
+    """M6: a pack that stopped responding must drop out of the bank aggregates
+    (and the energy integration) instead of contributing its last frozen
+    current/voltage forever."""
+    svc = BmsService(BmsCfg(enabled=True, master_mac="C0:D6:3C:52:0F:0D"), mqtt_cfg)
+    monkeypatch.setattr("inverter_bridge.bms.service.time.monotonic", lambda: 1000.0)
+    svc._pia_state = {1: _pia(1), 2: _pia(2)}
+    svc._pia_seen_t = {1: 995.0, 2: 900.0}  # pack2: 100 s sin responder (> 60 default)
+
+    fresh_pia, _fresh_pib = svc._fresh_states()
+
+    assert set(fresh_pia) == {1}
+
+
+def test_fresh_states_readmits_recovered_pack(mqtt_cfg, monkeypatch):
+    svc = BmsService(BmsCfg(enabled=True, master_mac="C0:D6:3C:52:0F:0D"), mqtt_cfg)
+    monkeypatch.setattr("inverter_bridge.bms.service.time.monotonic", lambda: 1000.0)
+    svc._pia_state = {2: _pia(2)}
+    svc._pia_seen_t = {2: 999.0}  # fresco otra vez
+
+    fresh_pia, _ = svc._fresh_states()
+
+    assert set(fresh_pia) == {2}
+
+
+# ───── M4: marcador online/offline por inversor, completo ─────
+
+
+@pytest.fixture
+def bridge_cfg2():
+    return BridgeConfig(
+        inverters=[
+            InverterCfg(name="inv1", port="/dev/ttyUSB1", slave=1),
+            InverterCfg(name="inv2", port="/dev/ttyUSB0", slave=2),
+        ],
+        mqtt=MqttCfg(host="x", username="u", password="p"),
+        polling=PollingCfg(
+            hot_interval_s=0.01,
+            inter_query_delay_s=0.0,
+            retry_attempts=1,
+            retry_backoff_s=0.0,
+        ),
+    )
+
+
+def _daemon_with_query(cfg, query_fn):
+    def factory(**kwargs):
+        m = MagicMock()
+        m.query = MagicMock(side_effect=query_fn)
+        return m
+
+    pub = MagicMock()
+    d = Daemon(
+        cfg,
+        serial_factory=factory,
+        publisher_factory=MagicMock(return_value=pub),
+        integrator=_fake_integrator(),
+        energy_persist_path=None,
+    )
+    return d, pub
+
+
+def _status_calls(pub):
+    return [
+        (c.args[0], c.args[1])
+        for c in pub.publish_value.call_args_list
+        if c.args and "status" in str(c.args[0])
+    ]
+
+
+def test_status_online_published_with_index_naming(bridge_cfg2):
+    """M4: healthy polling must publish 'online' (recovery/steady marker) and
+    the key must follow the inverter_<N>_ convention (it used inverter_<name>_
+    before, which broke topic derivation)."""
+    from tests.test_daemon import _real_frame_for
+
+    def query(slave, addr, count):
+        return _real_frame_for(addr, count, slave)
+
+    d, pub = _daemon_with_query(bridge_cfg2, query)
+    d.run_one_hot_cycle()
+
+    calls = _status_calls(pub)
+    assert ("inverter_1_status", "online") in calls
+    assert ("inverter_2_status", "online") in calls
+    d._executor.shutdown(wait=True)
+
+
+def test_status_offline_after_3_failed_cycles_index_naming(bridge_cfg2):
+    def bad_query(slave, addr, count):
+        raise TimeoutError("no response")
+
+    d, pub = _daemon_with_query(bridge_cfg2, bad_query)
+    for _ in range(3):
+        d.run_one_hot_cycle()
+
+    calls = _status_calls(pub)
+    assert ("inverter_1_status", "offline") in calls
+    assert ("inverter_2_status", "offline") in calls
+    assert all("inv1" not in k and "inv2" not in k for k, _ in calls)
+    d._executor.shutdown(wait=True)
+
+
+def test_status_has_discovery():
+    from inverter_bridge.mqtt_publisher import PER_INVERTER_SENSORS
+
+    assert "status" in PER_INVERTER_SENSORS
+
+
+# ───── B2: códigos de falla del inversor publicados ─────
+
+
+def test_aggregator_publishes_fault_bits():
+    """B2: the faults block (0x0204) was polled and thrown away. Publish the
+    raw registers as hex so HA can alert on any non-zero fault bit."""
+    from inverter_bridge.aggregator import aggregate_inverters
+    from inverter_bridge.parsers import ParsedBlock
+
+    faults = ParsedBlock(
+        block_addr=0x0204,
+        block_name="faults",
+        slave=1,
+        regs_raw=(0x0000, 0x0004, 0x0000, 0x0000, 0x0000, 0x0000),
+        fields={},
+    )
+    out = aggregate_inverters([{"faults": faults}])
+
+    assert out["inverter_1_fault_bits"] == "0000 0004 0000 0000 0000 0000"
+
+
+def test_fault_bits_has_discovery():
+    from inverter_bridge.mqtt_publisher import PER_INVERTER_SENSORS
+
+    assert "fault_bits" in PER_INVERTER_SENSORS
+
+
+def test_dead_cold_blocks_pruned():
+    """B2: fw_build_date/fw_model/fw_serial/config/thresholds were polled every
+    60 s (with retries, on a 16.7%-fail bus) and nobody consumed them."""
+    from inverter_bridge.srne_map import BLOCKS
+
+    names = {b.name for b in BLOCKS}
+    assert not names & {"fw_build_date", "fw_model", "fw_serial", "config", "thresholds"}
+    assert "faults" in names  # este sí quedó cableado
+
+
+# ───── M1 completo: worker colgado no se re-encola ─────
+
+
+def test_wedged_worker_not_resubmitted(bridge_cfg2):
+    """M1: if inv1's poll worker is still stuck from the previous cycle, the
+    daemon must NOT queue another query for the same port (two concurrent
+    queries on one tty = garbage) and inv2 must keep being polled."""
+    import threading
+
+    from tests.test_daemon import _real_frame_for
+
+    release = threading.Event()
+    calls_lock = threading.Lock()
+    calls = {"inv1": 0, "inv2": 0}
+
+    def query(slave, addr, count):
+        with calls_lock:
+            calls["inv1" if slave == 1 else "inv2"] += 1
+        if slave == 1:
+            release.wait(timeout=10)  # inv1 wedged
+            raise TimeoutError("wedged")
+        return _real_frame_for(addr, count, slave)
+
+    d, _pub = _daemon_with_query(bridge_cfg2, query)
+    d._poll_worker_timeout_s = 0.05
+    try:
+        d.run_one_hot_cycle()
+        d.run_one_hot_cycle()
+        with calls_lock:
+            assert calls["inv1"] == 1, "wedged inv1 must not be re-queued"
+            assert calls["inv2"] >= 2, "healthy inv2 must not be starved"
+    finally:
+        release.set()
+        d._executor.shutdown(wait=True)
+
+
+# ───── B4 / B7: metadatos y discovery faltantes ─────
+
+
+def test_meta_per_inverter_duration_is_json(bridge_cfg2):
+    from tests.test_daemon import _real_frame_for
+
+    d, pub = _daemon_with_query(
+        bridge_cfg2, lambda slave, addr, count: _real_frame_for(addr, count, slave)
+    )
+    d.run_one_hot_cycle()
+    payloads = [
+        c.args[1]
+        for c in pub.publish_value.call_args_list
+        if c.args and c.args[0] == "_meta/poll_duration_per_inverter_ms"
+    ]
+    assert payloads
+    parsed = json.loads(payloads[0])  # repr() de dict Python NO es JSON
+    assert set(parsed) == {"inv1", "inv2"}
+    d._executor.shutdown(wait=True)
+
+
+def test_apparent_power_legs_have_discovery():
+    from inverter_bridge.mqtt_publisher import PER_INVERTER_SENSORS
+
+    assert "load_apparent_power_l1" in PER_INVERTER_SENSORS
+    assert "load_apparent_power_l2" in PER_INVERTER_SENSORS

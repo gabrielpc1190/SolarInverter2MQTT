@@ -68,6 +68,10 @@ class BmsCfg:
     # timeout). El caso de desconexión explícita (is_connected=False) sale de
     # inmediato sin esperar este umbral.
     max_failed_cycles: int = 3
+    # Un pack cuya última lectura PIA sea más vieja que esto se EXCLUYE de los
+    # agregados del banco (y de la integración de energía) hasta que responda
+    # de nuevo — evita sumar corriente/voltaje congelados para siempre (M6).
+    stale_pack_timeout_s: float = 60.0
     mqtt_topic_prefix: str = "gadi_bms"    # topics raíz para MQTT publishing
     mqtt_device_name: str = "BlueSun"      # device name (slug → entity_id prefix)
     mqtt_device_id: str = "bluesun_bms"    # discovery device.identifiers
@@ -179,6 +183,7 @@ def load_config(path: Path) -> BridgeConfig:
         connect_timeout_s=float(bms_data.get("connect_timeout_s", 15.0)),
         reconnect_initial_backoff_s=float(bms_data.get("reconnect_initial_backoff_s", 2.0)),
         reconnect_max_backoff_s=float(bms_data.get("reconnect_max_backoff_s", 60.0)),
+        stale_pack_timeout_s=float(bms_data.get("stale_pack_timeout_s", 60.0)),
         mqtt_topic_prefix=str(bms_data.get("mqtt_topic_prefix", "gadi_bms")),
         mqtt_device_name=str(bms_data.get("mqtt_device_name", "BlueSun")),
         mqtt_device_id=str(bms_data.get("mqtt_device_id", "bluesun_bms")),

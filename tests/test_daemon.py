@@ -166,11 +166,16 @@ def test_mixed_success_one_inverter_offline(cfg):
     # Should have inv1 data
     assert "battery_state_of_charge" in last_agg
     # And offline for inv2
+    # M4: keys follow the inverter_<N>_ convention (the old inverter_<name>_
+    # key broke topic derivation and had no discovery)
     offline = [
         c for c in fake_pub.publish_value.call_args_list
-        if "inv2" in c.args[0] and c.args[1] == "offline"
+        if c.args[0] == "inverter_2_status" and c.args[1] == "offline"
     ]
     assert offline
+    assert ("inverter_1_status", "online") in [
+        (c.args[0], c.args[1]) for c in fake_pub.publish_value.call_args_list
+    ]
 
 
 def test_daemon_lifecycle_calls_connect_and_disconnect(cfg, monkeypatch):
@@ -465,9 +470,13 @@ def test_per_inverter_timeout_doesnt_block_other_inverter(cfg, monkeypatch):
         assert pv_calls
         aggregated = pv_calls[-1].args[0]
         assert "battery_state_of_charge" in aggregated
-        # inv1 counted as a failed cycle (its fail_count incremented).
-        assert d._fail_count["inv1"] >= 1
         # inv2 succeeded, so its fail count stays 0.
+        assert d._fail_count["inv2"] == 0
+        # B5/M1: the timeout branch no longer bumps the fail counter (it used
+        # to double-count). The still-wedged worker is counted by the
+        # skip-guard on the NEXT cycle — which also must not re-queue inv1.
+        d.run_one_hot_cycle()
+        assert d._fail_count["inv1"] >= 1
         assert d._fail_count["inv2"] == 0
     finally:
         # Wake the hanging worker so it doesn't outlive the test.

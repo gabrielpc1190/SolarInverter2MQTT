@@ -10,11 +10,12 @@ and per-thread timeouts (a stuck inverter doesn't block the other).
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from pathlib import Path
 
@@ -74,6 +75,10 @@ class Daemon:
             else EnergyIntegrator(persist_path=energy_persist_path)
         )
         self._fail_count: dict[str, int] = defaultdict(int)
+        # Último future por inversor: si sigue corriendo al ciclo siguiente,
+        # NO se encola otro poll al mismo puerto (M1 — dos queries concurrentes
+        # en un tty producen basura y el backlog crecería sin límite).
+        self._inflight: dict[str, Future] = {}
         # Protects `_fail_count` and `_crc_fails_total` against concurrent
         # mutation from the per-inverter worker threads (F-5).
         self._fail_count_lock = threading.Lock()
@@ -205,8 +210,9 @@ class Daemon:
         # not sum(per-inv) — the whole point of F-5.
         elapsed_ms = round((time.monotonic() - cycle_start) * 1000, 1)
         self.publisher.publish_value("_meta/poll_duration_ms", elapsed_ms)
+        # JSON, not Python-dict repr() (B4) — parseable by HA templates.
         self.publisher.publish_value(
-            "_meta/poll_duration_per_inverter_ms", per_inverter_durations_ms
+            "_meta/poll_duration_per_inverter_ms", json.dumps(per_inverter_durations_ms)
         )
         self.publisher.publish_value("_meta/crc_fails_total", self._crc_fails_total)
         self.publisher.publish_value(
@@ -254,8 +260,22 @@ class Daemon:
         # Submit in cfg order, but stash an index so results land in slot[i].
         futures = []
         for idx, inv in enumerate(self.cfg.inverters):
+            prev = self._inflight.get(inv.name)
+            if prev is not None and not prev.done():
+                # M1: the previous poll for this port is still running (wedged
+                # write/driver). Skip this cycle — it counts as a failure for
+                # the offline marker, and nothing new is queued for the port.
+                log.warning(
+                    "inv %s: previous poll worker still running — skipping this cycle",
+                    inv.name,
+                )
+                with self._fail_count_lock:
+                    self._fail_count[inv.name] += 1
+                per_inverter_durations_ms[inv.name] = 0.0
+                continue
             started = time.monotonic()
             fut = self._executor.submit(self._poll_inverter, inv, tier=tier)
+            self._inflight[inv.name] = fut
             futures.append((idx, inv, fut, started))
         for idx, inv, fut, started in futures:
             try:
@@ -266,15 +286,9 @@ class Daemon:
                     "treating as empty blocks for this cycle",
                     inv.name, self._poll_worker_timeout_s, tier.value,
                 )
-                # Count this as a failed cycle for the offline-marker logic so
-                # a permanently-wedged port still surfaces as offline.
-                with self._fail_count_lock:
-                    self._fail_count[inv.name] += 1
-                    fails = self._fail_count[inv.name]
-                if fails >= 3:
-                    self.publisher.publish_value(
-                        f"inverter_{inv.name}_status", "offline"
-                    )
+                # No fail-count bump here: the skip-guard above counts every
+                # subsequent wedged cycle and the worker counts once when it
+                # finally finishes — bumping here too double-counted (B5).
                 per_inverter[idx] = {}
             except Exception:
                 log.exception("inv %s poll worker crashed (tier=%s)",
@@ -282,6 +296,19 @@ class Daemon:
                 per_inverter[idx] = {}
             per_inverter_durations_ms[inv.name] = round(
                 (time.monotonic() - started) * 1000, 1
+            )
+        # M4: per-inverter status marker, published every cycle under the
+        # inverter_<N>_ convention (the old inverter_<name>_ key broke topic
+        # derivation and had no discovery, so HA never saw it — and "online"
+        # was never published on recovery).
+        with self._fail_count_lock:
+            fails_snapshot = {
+                inv.name: self._fail_count[inv.name] for inv in self.cfg.inverters
+            }
+        for n, inv in enumerate(self.cfg.inverters, start=1):
+            self.publisher.publish_value(
+                f"inverter_{n}_status",
+                "offline" if fails_snapshot[inv.name] >= 3 else "online",
             )
         return per_inverter, per_inverter_durations_ms
 
@@ -340,6 +367,6 @@ class Daemon:
                 self._fail_count[inv.name] += 1
                 fails = self._fail_count[inv.name]
         if fails >= 3:
+            # Status topic publish happens centrally in _poll_all_parallel (M4).
             log.error("inv %s offline (3 consecutive cycles failed)", inv.name)
-            self.publisher.publish_value(f"inverter_{inv.name}_status", "offline")
         return out
