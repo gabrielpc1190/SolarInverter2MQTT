@@ -53,9 +53,25 @@ M1-mínimo (write_timeout serial), B1, B8, B9, <b>watchdog systemd activo</b> (T
 Host: 18 parches de seguridad + unattended-upgrades (H1), config 640 root:dialout (H4 — gotcha: systemd no
 aplicó los grupos suplementarios, el primer intento root:inverter-bridge falló), timezone CST, servicios
 Armbian colgantes deshabilitados (H2 — el load fantasma muere en el próximo reboot), respaldo diario de
-config+energía al NAS (H5). <b>Pendientes de backlog:</b> M2, M1-completo, M4, M6, B2-B7, H6 (journal
-persistente). ⚠️ El upgrade trajo <b>kernel nuevo 6.18.33</b> (corriendo aún 6.12.68) — el próximo reboot
+config+energía al NAS (H5). ⚠️ El upgrade trajo <b>kernel nuevo 6.18.33</b> (corriendo aún 6.12.68) — el próximo reboot
 conviene hacerlo supervisado.</p>
+</div>
+
+<div class="card" style="border-left:4px solid #1e7f4f;background:#f0f9f4">
+<p><b>✅ RONDA 2 (2026-07-04 ~18:00 CST, commit <code>4ada645</code>, desplegada y verificada):</b>
+M6 (packs BMS congelados expiran de los agregados a los 60 s — ya no suman lecturas viejas),
+M4 (marcador <code>inverter_&lt;N&gt;_status</code> completo: naming por índice, "online" de recuperación,
+discovery — verificado en vivo publicando "offline" con los inversores desconectados),
+B2 (<code>fault_bits</code> publicados en hex + 5 bloques cold muertos podados — ~5 consultas/min menos
+en el bus ruidoso), M1-completo (un poll colgado no se re-encola: adiós doble consulta al mismo puerto),
+B4 (meta en JSON), B5 (doble conteo eliminado), B7 (discovery de potencia aparente L1/L2), y
+<code>MQTT_CANONICAL.json</code> regenerado desde el código (v3). 277/277 tests.</p>
+<p><b>Correcciones al informe original:</b> (1) H6 estaba equivocado — el journal SÍ persiste
+(<code>/var/log/journal → /var/log.hdd/journal</code> en eMMC, diseño de armbian-ramlog); nada que hacer.
+(2) <b>Reboot con kernel 6.18.33: EXITOSO</b> (17:22 CST, apagado limpio en ~15 s con la energía guardada
+por A1; WiFi re-asocia en ~1 s; los zombis D-state desaparecieron — load real ~0.2). La "desaparición"
+post-reboot que parecía WiFi roto fue en realidad el traslado físico del equipo a la oficina.
+<b>Backlog restante: solo M2</b> (requiere capturas reales del bus).</p>
 </div>
 
 <h2>Resumen ejecutivo</h2>
