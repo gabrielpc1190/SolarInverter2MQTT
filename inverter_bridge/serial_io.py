@@ -235,12 +235,13 @@ class SerialPort:
             s.flush()
             expected = 5 + 2 * count
             buf = b""
-            # Read chunks until the buffer holds our response plus a margin of
-            # LCD chatter, or the bus falls silent, or the deadline hits. The
-            # `+ 96` margin (was +32) gives room for a few interleaved chatter
-            # frames ahead of our response before the cap truncates the read.
-            # monotonic: an NTP step must not stretch/shrink the window (B1).
-            cap = expected + 96
+            # Read chunks until the buffer holds our response plus a small
+            # margin of interleaved LCD chatter, or the bus falls silent, or
+            # the deadline hits. The `+ 32` margin is deliberate: a larger cap
+            # makes read() block waiting for chatter that only trickles in
+            # (~20 B/s), which ballooned poll latency ~22x in testing. monotonic:
+            # an NTP step must not stretch/shrink the window (B1).
+            cap = expected + 32
             deadline = time.monotonic() + self.timeout_s
             while time.monotonic() < deadline and len(buf) < cap:
                 chunk = s.read(cap - len(buf))

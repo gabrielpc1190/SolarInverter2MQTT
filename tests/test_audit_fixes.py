@@ -719,13 +719,13 @@ def test_query_rejects_same_count_response_for_other_address(fake_serial):
     """M2: the LCD reads a DIFFERENT block with the same register count right
     before our real response lands. Matching by count alone (old behavior)
     would grab the decoy; address-aware matching must skip it and return OUR
-    orphan response instead."""
-    decoy = _req_frame(1, 0x0300, 15) + _resp_frame(1, [0xDEAD] * 15)
-    ours = _resp_frame(1, list(range(0x1000, 0x100F)))  # orphan (our req doesn't echo)
+    orphan response instead. (count=6 so decoy + ours fit the read window.)"""
+    decoy = _req_frame(1, 0x0300, 6) + _resp_frame(1, [0xDEAD] * 6)
+    ours = _resp_frame(1, list(range(0x1000, 0x1006)))  # orphan (our req doesn't echo)
     fake_serial.rx = decoy + ours
 
     port = SerialPort(device="/dev/null", timeout_s=0.2)
-    frame = port.query(slave=1, addr=0x0100, count=15)
+    frame = port.query(slave=1, addr=0x0204, count=6)
 
     assert frame.regs[0] == 0x1000, "must return OUR block, not the same-count decoy"
     assert 0xDEAD not in frame.regs
@@ -734,12 +734,12 @@ def test_query_rejects_same_count_response_for_other_address(fake_serial):
 def test_query_pairs_response_to_its_preceding_request(fake_serial):
     """M2: when the LCD reads OUR exact address, the response paired to that
     request is valid data for us — return it (same address = same data)."""
-    paired = _req_frame(1, 0x0100, 15) + _resp_frame(1, list(range(0x2000, 0x200F)))
-    other = _req_frame(1, 0x0300, 15) + _resp_frame(1, [0xBEEF] * 15)
-    fake_serial.rx = other + paired
+    paired = _req_frame(1, 0x0204, 6) + _resp_frame(1, list(range(0x2000, 0x2006)))
+    other = _req_frame(1, 0x0300, 6) + _resp_frame(1, [0xBEEF] * 6)
+    fake_serial.rx = paired + other  # paired first so it's within the read window
 
     port = SerialPort(device="/dev/null", timeout_s=0.2)
-    frame = port.query(slave=1, addr=0x0100, count=15)
+    frame = port.query(slave=1, addr=0x0204, count=6)
 
     assert frame.regs[0] == 0x2000
     assert 0xBEEF not in frame.regs
