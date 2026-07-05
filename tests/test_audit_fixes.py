@@ -192,6 +192,10 @@ class _FakeSerial:
         type(self).kwargs = kwargs
         self._buf = type(self).rx
 
+    @property
+    def in_waiting(self):
+        return len(self._buf)
+
     def reset_input_buffer(self):
         pass
 

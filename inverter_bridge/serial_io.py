@@ -247,30 +247,33 @@ class SerialPort:
             req = build_read_holding_request(slave, addr, count)
             s.write(req)
             s.flush()
-            expected = 5 + 2 * count
             buf = b""
-            # Read chunks until the buffer holds our response plus a small
-            # margin of interleaved LCD chatter, or the bus falls silent, or
-            # the deadline hits. The `+ 32` margin is deliberate: a larger cap
-            # makes read() block waiting for chatter that only trickles in
-            # (~20 B/s), which ballooned poll latency ~22x in testing. monotonic:
-            # an NTP step must not stretch/shrink the window (B1).
-            cap = expected + 32
+            # Read incrementally and RETURN as soon as our response is complete,
+            # instead of waiting to fill a fixed-size buffer. The old fixed-cap
+            # read blocked until it had `expected + 32` bytes; when the LCD
+            # chatter trickles in without a silence gap, that filled to the
+            # cap only at the deadline — every poll took the full 1.5s timeout
+            # even though the response had already arrived (measured 1522 ms/
+            # block). Draining `in_waiting` and re-matching after each chunk
+            # returns in ~tens of ms. monotonic: NTP-step-proof window (B1).
             deadline = time.monotonic() + self.timeout_s
-            while time.monotonic() < deadline and len(buf) < cap:
-                chunk = s.read(cap - len(buf))
+            while time.monotonic() < deadline:
+                waiting = s.in_waiting
+                chunk = s.read(waiting if waiting > 0 else 1)
                 if not chunk:
-                    break
+                    continue
                 buf += chunk
+                frame = select_response(
+                    buf, slave, addr, count, on_crc_error=self.on_crc_error
+                )
+                if frame is not None:
+                    return frame
+                exc = self._find_exception(buf, slave)
+                if exc is not None:
+                    raise exc
         finally:
             s.close()
-        # Address-aware selection (M2): return OUR response — the one paired to
-        # a request for our address, or our own orphan — never a same-count
-        # response the LCD read from a DIFFERENT block.
-        frame = select_response(buf, slave, addr, count, on_crc_error=self.on_crc_error)
-        if frame is not None:
-            return frame
-        # Surface an exception if the slave sent one; otherwise time out.
+        # Deadline hit: surface an exception if the slave sent one; else time out.
         exc = self._find_exception(buf, slave)
         if exc is not None:
             raise exc
