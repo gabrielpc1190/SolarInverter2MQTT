@@ -91,6 +91,99 @@ def parse_frame_stream(
     return frames
 
 
+def responses_with_context(
+    stream: bytes, on_crc_error=None
+) -> list[tuple[ModbusFrame, int | None]]:
+    """Like `parse_frame_stream`, but pairs each response with the address of
+    the REQUEST that immediately precedes it on the wire.
+
+    On the inverters' shared bus the LCD acts as a second Modbus master, so the
+    stream is a sequence of `[REQUEST addr=X count=N] [RESPONSE N regs]` pairs.
+    A response carries no address of its own, but the request right before it
+    does. Verified by real bus capture 2026-07-04 (tools/capture_fixtures.py):
+    every LCD response is preceded by its request, and OUR OWN request does NOT
+    echo into RX — so our response appears "orphan" (ctx_addr is None).
+
+    Returns a list of `(frame, ctx_addr)` in stream order. `ctx_addr` is the
+    addr of the nearest preceding request from the same slave, or None. This is
+    what lets `query()` reject a same-count response that actually belongs to a
+    DIFFERENT block the LCD polled (audit M2).
+
+    (The walk mirrors `parse_frame_stream`; kept as a separate function so the
+    original, widely-tested parser stays untouched.)
+    """
+    out: list[tuple[ModbusFrame, int | None]] = []
+    pending_addr: int | None = None
+    pending_slave: int | None = None
+    i = 0
+    n = len(stream)
+    while i < n - 4:
+        slave = stream[i]
+        func = stream[i + 1]
+        if not (1 <= slave <= 0xF7):
+            i += 1
+            continue
+        # Response: slave fc bc <bc bytes> crc(2)
+        if func == FC_READ_HOLDING and i + 5 <= n:
+            bc = stream[i + 2]
+            if 2 <= bc <= 250 and bc % 2 == 0:
+                total = 5 + bc
+                if i + total <= n:
+                    frame_bytes = stream[i : i + total]
+                    if crc16(frame_bytes[:-2]) == frame_bytes[-2:]:
+                        body = frame_bytes[3 : 3 + bc]
+                        regs = [(body[k] << 8) | body[k + 1] for k in range(0, bc, 2)]
+                        ctx = pending_addr if pending_slave == slave else None
+                        out.append((ModbusFrame(slave=slave, func=func, regs=regs), ctx))
+                        pending_addr = None
+                        pending_slave = None
+                        i += total
+                        continue
+                    is_valid_request = (
+                        i + 8 <= n and crc16(stream[i : i + 6]) == stream[i + 6 : i + 8]
+                    )
+                    if on_crc_error is not None and not is_valid_request:
+                        on_crc_error()
+        # Request: slave fc addr(2) count(2) crc(2)
+        if func == FC_READ_HOLDING and i + 8 <= n:
+            req = stream[i : i + 8]
+            if crc16(req[:-2]) == req[-2:]:
+                pending_addr = (req[2] << 8) | req[3]
+                pending_slave = slave
+                i += 8
+                continue
+        # Exception: slave (fc|0x80) excode crc(2)
+        if func & 0x80 and i + 5 <= n:
+            exc = stream[i : i + 5]
+            if crc16(exc[:-2]) == exc[-2:]:
+                i += 5
+                continue
+        i += 1
+    return out
+
+
+def select_response(
+    stream: bytes, slave: int, addr: int, count: int, on_crc_error=None
+) -> ModbusFrame | None:
+    """Pick OUR response out of a noisy bus buffer (audit M2).
+
+    Prefers a response of the right register count whose preceding request was
+    for OUR address (the LCD read our exact block — same address, same data).
+    Falls back to an orphan response (no preceding request = our own, since our
+    request doesn't echo). A same-count response whose preceding request is for
+    a DIFFERENT address is the LCD reading another block — rejected, never
+    published as ours.
+    """
+    paired = responses_with_context(stream, on_crc_error=on_crc_error)
+    for f, ctx in paired:
+        if f.slave == slave and len(f.regs) == count and ctx == addr:
+            return f
+    for f, ctx in paired:
+        if f.slave == slave and len(f.regs) == count and ctx is None:
+            return f
+    return None
+
+
 class SerialPort:
     """Thin pyserial wrapper with stream-tolerant `query()`.
 
@@ -142,28 +235,43 @@ class SerialPort:
             s.flush()
             expected = 5 + 2 * count
             buf = b""
-            # monotonic: an NTP step must not stretch/shrink the read window (B1)
+            # Read chunks until the buffer holds our response plus a margin of
+            # LCD chatter, or the bus falls silent, or the deadline hits. The
+            # `+ 96` margin (was +32) gives room for a few interleaved chatter
+            # frames ahead of our response before the cap truncates the read.
+            # monotonic: an NTP step must not stretch/shrink the window (B1).
+            cap = expected + 96
             deadline = time.monotonic() + self.timeout_s
-            while time.monotonic() < deadline and len(buf) < expected + 32:
-                chunk = s.read(expected + 32 - len(buf))
+            while time.monotonic() < deadline and len(buf) < cap:
+                chunk = s.read(cap - len(buf))
                 if not chunk:
                     break
                 buf += chunk
         finally:
             s.close()
-        # Pull our response from the buffer (ignoring LCD-injected traffic)
-        for f in parse_frame_stream(buf, on_crc_error=self.on_crc_error):
-            if f.slave == slave and len(f.regs) == count:
-                return f
-        # Look for an exception frame matching our slave
+        # Address-aware selection (M2): return OUR response — the one paired to
+        # a request for our address, or our own orphan — never a same-count
+        # response the LCD read from a DIFFERENT block.
+        frame = select_response(buf, slave, addr, count, on_crc_error=self.on_crc_error)
+        if frame is not None:
+            return frame
+        # Surface an exception if the slave sent one; otherwise time out.
+        exc = self._find_exception(buf, slave)
+        if exc is not None:
+            raise exc
+        raise TimeoutError(
+            f"no valid response from slave 0x{slave:02x} on {self.device} "
+            f"(read {len(buf)} B in {self.timeout_s}s)"
+        )
+
+    @staticmethod
+    def _find_exception(buf: bytes, slave: int) -> ModbusException | None:
+        """Return the Modbus exception the slave sent for our read, if any."""
         marker = bytes([slave, 0x83])
         idx = buf.find(marker)
         while idx != -1 and idx + 5 <= len(buf):
             exc = buf[idx : idx + 5]
             if crc16(exc[:-2]) == exc[-2:]:
-                raise ModbusException(slave, 0x03, exc[2])
+                return ModbusException(slave, 0x03, exc[2])
             idx = buf.find(marker, idx + 1)
-        raise TimeoutError(
-            f"no valid response from slave 0x{slave:02x} on {self.device} "
-            f"(read {len(buf)} B in {self.timeout_s}s)"
-        )
+        return None

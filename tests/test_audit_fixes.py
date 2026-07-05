@@ -697,3 +697,83 @@ def test_apparent_power_legs_have_discovery():
 
     assert "load_apparent_power_l1" in PER_INVERTER_SENSORS
     assert "load_apparent_power_l2" in PER_INVERTER_SENSORS
+
+
+# ═════════════════ M2: matching por dirección (anti-chatter del LCD) ═════════════════
+#
+# Captura real del bus (2026-07-04, tools/capture_fixtures.py) confirmó que en el
+# cable compartido cada RESPUESTA viene precedida por su REQUEST (que sí lleva la
+# dirección), y que NUESTRA propia request NO hace eco en el RX (nuestra respuesta
+# queda "huérfana", sin request delante). El fix: rechazar una respuesta del mismo
+# tamaño cuya request-previa sea de OTRA dirección (chatter del LCD a otro bloque),
+# y aceptar solo la de nuestra dirección o la huérfana (la nuestra).
+
+
+def _req_frame(slave: int, addr: int, count: int) -> bytes:
+    core = bytes([slave, 0x03, (addr >> 8) & 0xFF, addr & 0xFF,
+                  (count >> 8) & 0xFF, count & 0xFF])
+    return core + crc16(core)
+
+
+def test_query_rejects_same_count_response_for_other_address(fake_serial):
+    """M2: the LCD reads a DIFFERENT block with the same register count right
+    before our real response lands. Matching by count alone (old behavior)
+    would grab the decoy; address-aware matching must skip it and return OUR
+    orphan response instead."""
+    decoy = _req_frame(1, 0x0300, 15) + _resp_frame(1, [0xDEAD] * 15)
+    ours = _resp_frame(1, list(range(0x1000, 0x100F)))  # orphan (our req doesn't echo)
+    fake_serial.rx = decoy + ours
+
+    port = SerialPort(device="/dev/null", timeout_s=0.2)
+    frame = port.query(slave=1, addr=0x0100, count=15)
+
+    assert frame.regs[0] == 0x1000, "must return OUR block, not the same-count decoy"
+    assert 0xDEAD not in frame.regs
+
+
+def test_query_pairs_response_to_its_preceding_request(fake_serial):
+    """M2: when the LCD reads OUR exact address, the response paired to that
+    request is valid data for us — return it (same address = same data)."""
+    paired = _req_frame(1, 0x0100, 15) + _resp_frame(1, list(range(0x2000, 0x200F)))
+    other = _req_frame(1, 0x0300, 15) + _resp_frame(1, [0xBEEF] * 15)
+    fake_serial.rx = other + paired
+
+    port = SerialPort(device="/dev/null", timeout_s=0.2)
+    frame = port.query(slave=1, addr=0x0100, count=15)
+
+    assert frame.regs[0] == 0x2000
+    assert 0xBEEF not in frame.regs
+
+
+def test_query_still_returns_orphan_when_lcd_silent(fake_serial):
+    """No regression: for a block the LCD never polls (e.g. 0xF000), only our
+    own orphan response exists — it must still be returned."""
+    ours = _resp_frame(1, list(range(8)))
+    fake_serial.rx = ours
+
+    port = SerialPort(device="/dev/null", timeout_s=0.2)
+    frame = port.query(slave=1, addr=0xF000, count=8)
+
+    assert frame.regs == list(range(8))
+
+
+def test_real_bus_capture_pairs_addresses():
+    """Golden: on the REAL captured bus stream, address-aware pairing correctly
+    associates the battery block (0x0100 → 15 regs) and state block (0x0210 →
+    19 regs) with their preceding LCD requests — proving the pairing works
+    against genuine chatter, not just synthetic frames. The passive capture is
+    pure LCD traffic (no orphan of ours), so we assert the pairing directly."""
+    import pathlib
+
+    from inverter_bridge.serial_io import responses_with_context
+
+    cap = (pathlib.Path(__file__).parent / "fixtures"
+           / "bus_capture_25s_slave01_m2_20260704.hex").read_text().strip()
+    paired = responses_with_context(bytes.fromhex(cap))
+
+    by_addr = {ctx: len(f.regs) for f, ctx in paired if ctx is not None}
+    assert by_addr.get(0x0100) == 15, "battery block paired to a 15-reg response"
+    assert by_addr.get(0x0210) == 19, "state block paired to a 19-reg response"
+    # Every paired response's reg-count matches a plausible LCD read; none of
+    # our block addresses got mis-paired to the wrong size.
+    assert by_addr.get(0x0223) == 23
