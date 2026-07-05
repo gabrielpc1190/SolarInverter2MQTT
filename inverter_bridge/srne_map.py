@@ -181,11 +181,25 @@ INVERTER_STATE_LOOKUP: dict[int, str] = {
 
 
 # Charge state code lookup (0x010B). Per spec §5.11.
-# Only `1` observed empirically (PV mid-day); rest inferred.
+# Codes `1` and `2` confirmed empirically; `0`/`3` inferred.
+#   1 = "PV charging": MPPT/bulk phase — battery below the boost setpoint,
+#       charge current tracks available PV (observed mid-day).
+#   2 = "Boost charging": constant-voltage / absorption stage. Confirmed
+#       2026-07-05 on this 100% offgrid site — code 2 held for hours with the
+#       grid at 0.0 V the whole day while battery voltage was regulated to the
+#       56.0 V boost setpoint (p90=56.0, max=56.4) at ~41 A mean charge current.
+#       The SRNE SPH10048 manual calls this stage "Boost charge" and describes
+#       the boost voltage as the "set voltage during constant voltage charging".
+#       Was mislabeled "Grid charging" (an SA-era inference) — impossible here,
+#       there is no grid. Only the human label changed; no HA logic depends on
+#       this text (the old PV-power gate that read charge_state was removed —
+#       see aggregator.py).
+#   3 = "Float": matches the manual's "Floating charge" (not observed 2026-07-05,
+#       the config keeps float below boost so the bank tapers straight to Idle).
 CHARGE_STATE_LOOKUP: dict[int, str] = {
     0: "Idle",
     1: "PV charging",
-    2: "Grid charging",
+    2: "Boost charging",
     3: "Float",
 }
 

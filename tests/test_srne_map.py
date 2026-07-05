@@ -72,6 +72,14 @@ def test_charge_state_lookup_has_pv_charging_at_1():
     assert CHARGE_STATE_LOOKUP[1] == "PV charging"
 
 
+def test_charge_state_lookup_code2_is_boost_not_grid():
+    # 2026-07-05: code 2 was observed for hours on a fully offgrid site
+    # (grid 0.0 V all day) with the battery voltage regulated to the 56.0 V
+    # boost setpoint at high charge current — i.e. constant-voltage / "Boost"
+    # charging per the SRNE SPH10048 manual, NOT "Grid charging".
+    assert CHARGE_STATE_LOOKUP[2] == "Boost charging"
+
+
 def test_ascii_decode_extracts_text():
     # Real captured regs from 0x0030 fw_model block: "SR-24031501..."
     # Each reg = char in low byte, high byte = 0
