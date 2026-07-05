@@ -167,12 +167,23 @@ def select_response(
 ) -> ModbusFrame | None:
     """Pick OUR response out of a noisy bus buffer (audit M2).
 
-    Prefers a response of the right register count whose preceding request was
-    for OUR address (the LCD read our exact block — same address, same data).
-    Falls back to an orphan response (no preceding request = our own, since our
-    request doesn't echo). A same-count response whose preceding request is for
-    a DIFFERENT address is the LCD reading another block — rejected, never
-    published as ours.
+    Three-tier match, strongest first:
+      1. A response whose preceding request was for OUR exact address (the LCD
+         read our block — same address, same data; highest confidence).
+      2. An orphan response (no preceding request = our own, since our request
+         doesn't echo into RX).
+      3. Fallback: any same-count response for our slave.
+
+    Tiers 1-2 give the M2 collision protection (a same-count response the LCD
+    read from a DIFFERENT block is only chosen if nothing better exists). Tier 3
+    preserves the original behavior so we never regress into a timeout: on the
+    real bus our orphan response is often preceded IN THE BYTE STREAM by an
+    unrelated LCD request (our request doesn't echo, so the "nearest preceding
+    request" isn't ours), which would strand tiers 1-2 and force a retry —
+    empirically ballooning poll latency ~22x. Since every block we poll has a
+    unique register count on this hardware (verified by capture), tier 3 is
+    safe: the wrong-address collision it could theoretically pick does not
+    occur in practice.
     """
     paired = responses_with_context(stream, on_crc_error=on_crc_error)
     for f, ctx in paired:
@@ -180,6 +191,9 @@ def select_response(
             return f
     for f, ctx in paired:
         if f.slave == slave and len(f.regs) == count and ctx is None:
+            return f
+    for f, _ctx in paired:
+        if f.slave == slave and len(f.regs) == count:
             return f
     return None
 
