@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Revisión inverter-bridge — código + host (2026-07-04)</title>
+<title>Revisión inverter-bridge — código + host (2026-07-04) — RESUELTO</title>
 <style>
   :root{
     --bg:#f6f7f9; --card:#ffffff; --ink:#1c2530; --muted:#5b6675;
@@ -40,8 +40,12 @@
 </head>
 <body>
 <main>
-<h1>🔍 Revisión inverter-bridge — código + host</h1>
-<p class="sub">2026-07-04 · Auditoría del daemon en producción (GADI Orange Pi 3 LTS, 172.16.9.32) — solo hallazgos, <b>nada fue modificado</b>.</p>
+<h1>✅ Revisión inverter-bridge — código + host — <span style="color:#1e7f4f">RESUELTO</span></h1>
+<p class="sub">2026-07-04 · Auditoría del daemon en producción (GADI Orange Pi 3 LTS, 172.16.9.32). <b>Cerrado el mismo día:</b> 22 de 23 hallazgos aplicados, desplegados y verificados en producción; 1 diferido a propósito (M2). El texto original de la auditoría se conserva abajo como registro.</p>
+
+<div class="card" style="border-left:5px solid #1e7f4f;background:#e8f6ee">
+<p style="margin:0"><b>🏁 CASO CERRADO (2026-07-04 ~18:11 CST).</b> Reconexión en el cuarto eléctrico verificada en vivo: ambos inversores <code>online</code>, SOC/carga/PV fluyendo, BMS por BLE reconectado (banco 85.9%), energía retomada sin pérdida (803.480/775.170 Wh), watchdog latiendo. Todos los fixes de las 2 rondas operando en producción. Commits <code>1c3ecef</code> · <code>080d576</code> · <code>4ada645</code> · <code>bd4f13d</code> en <code>master</code>. 277/277 tests verdes. <b>Único pendiente: M2</b> (matching de tramas serie — requiere capturar tráfico real del bus; no urgente).</p>
+</div>
 
 <div class="card" style="border-left:4px solid #1e7f4f;background:#f0f9f4">
 <p><b>✅ APLICADO (2026-07-04 ~15:15 CST, commit <code>1c3ecef</code>, desplegado y verificado en producción):</b>
@@ -84,7 +88,7 @@ post-reboot que parecía WiFi roto fue en realidad el traslado físico del equip
   <div><b>8</b><span>medios (código)</span></div>
   <div><b>9</b><span>bajos (código)</span></div>
   <div><b>4</b><span>mejoras clave (host)</span></div>
-  <div><b>0</b><span>cambios aplicados hoy</span></div>
+  <div><b>22/23</b><span>resueltos (1 diferido: M2)</span></div>
 </div>
 
 <h2>Parte 1 — Código (severidad ALTA)</h2>
@@ -251,7 +255,7 @@ post-reboot que parecía WiFi roto fue en realidad el traslado físico del equip
 </ol>
 </div>
 
-<footer>Generado por Claude · 2026-07-04 ~14:40 CST · Revisión de solo lectura: ningún cambio aplicado al repo ni al host. Código auditado: 18 módulos (~3.400 líneas) + tests + unit systemd. Host: Armbian 26.2.1 trixie, kernel 6.12.68-sunxi64, uptime 45 días.</footer>
+<footer>Generado por Claude · auditoría 2026-07-04 ~14:40 CST · <b>RESUELTO ~18:11 CST</b> (22/23 aplicados y verificados en producción, M2 diferido). Código auditado: 18 módulos (~3.400 líneas) + tests + unit systemd. Host: Armbian 26.2.1 trixie, kernel 6.18.33-sunxi64 (tras el upgrade). Commits: 1c3ecef · 080d576 · 4ada645 · bd4f13d.</footer>
 </main>
 </body>
 </html>
