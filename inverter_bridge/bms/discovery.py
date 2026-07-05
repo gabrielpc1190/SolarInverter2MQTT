@@ -1,6 +1,6 @@
 """MQTT discovery payload generators para las entidades BMS BlueSun.
 
-Genera 86 payloads de discovery para HA bajo prefix `bluesun_*` (cleaner que
+Genera 100 payloads de discovery para HA bajo prefix `bluesun_*` (cleaner que
 el viejo `panel_cuartoelectrico_bluesun_*` del firmware Panel S3). Los viejos
 quedan orphan/unavailable en HA hasta limpieza manual; los dashboards y
 automations se migran a referenciar `sensor.bluesun_*` por aparte.
@@ -8,9 +8,10 @@ automations se migran a referenciar `sensor.bluesun_*` por aparte.
 Estructura del catálogo:
   - PIA per pack (7 * 4 = 28): V/I/SoC/SoH/cycles/remaining_Ah/nominal_Ah
   - PIB per pack (10 * 4 = 40): cell V min/max/avg/delta + 4 cell temps + env + pcb
-  - Bank aggregates (12): avg V, sum I, SoC avg/spread, power total/+/-, remaining/nominal Ah, min SoH, max cycles, max cell temp
+  - Bank aggregates (17): avg V, sum I, SoC avg/min/spread, power total/+/-, remaining/nominal Ah, min SoH, max cycles, max cell temp, +4 per-pack current/power splits
   - Integration energy (2): battery_energy_in/out (`total_increasing`)
   - Serials (4): pack01..04_serial (text-like)
+  - Telemetry (9): octopus_parses_ok + 4 pack `_parses` (PIA+PIB) + 4 pack `_soc_polls` (PIA-only heartbeat)
 
 Topic layout:
   Discovery:    homeassistant/sensor/<object_id>/config
@@ -121,6 +122,13 @@ def _bank_entities() -> list[EntityDef]:
         EntityDef("bluesun_bank_voltage_avg", "Bank Voltage Avg", "V", "voltage", accuracy=2),
         EntityDef("bluesun_bank_current_total", "Bank Current Total", "A", "current", accuracy=2),
         EntityDef("bluesun_bank_soc_avg", "Bank SoC Avg", "%", "battery", accuracy=1),
+        # Min de packs frescos: la señal HONESTA para autonomía/energía. El
+        # promedio (`_soc_avg`) se infla si hay packs apagados/desbalanceados;
+        # el banco se vacía al ritmo del pack MÁS BAJO (el BMS corta por min).
+        EntityDef(
+            "bluesun_bank_soc_min", "Bank SoC Min", "%", "battery", accuracy=1,
+            icon="mdi:battery-arrow-down",
+        ),
         EntityDef(
             "bluesun_bank_soc_spread", "Bank SoC Spread", "%", None,
             icon="mdi:arrow-expand-horizontal", accuracy=1,
@@ -205,11 +213,21 @@ def _telemetry_entities() -> list[EntityDef]:
             state_class="total_increasing", icon="mdi:counter",
             accuracy=0, entity_category="diagnostic",
         ))
+    # Per-pack PIA-only counters ("SoC polls"): heartbeat de frescura del SoC.
+    # Sube SOLO cuando un poll PIA (V/I/SoC) tiene éxito; HA lo usa para gatear
+    # la frescura de cada pack en `sensor.gadi_battery_soc` (más preciso que
+    # `_parses`, que también sube por polls PIB de temperatura/celdas).
+    for p in range(1, 5):
+        entities.append(EntityDef(
+            f"bluesun_pack{p:02d}_soc_polls", f"Pack{p:02d} SoC Polls", None, None,
+            state_class="total_increasing", icon="mdi:counter",
+            accuracy=0, entity_category="diagnostic",
+        ))
     return entities
 
 
 def all_bms_entities() -> list[EntityDef]:
-    """Catálogo: 28 PIA + 40 PIB + 4 serial + 16 bank + 2 energy + 5 telemetry = 95."""
+    """Catálogo: 28 PIA + 40 PIB + 4 serial + 17 bank + 2 energy + 9 telemetry = 100."""
     out: list[EntityDef] = []
     for p in (1, 2, 3, 4):
         out.extend(_pia_entities_for_pack(p))

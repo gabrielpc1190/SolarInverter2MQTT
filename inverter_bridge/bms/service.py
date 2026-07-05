@@ -90,6 +90,13 @@ class BmsService:
         self._parses_ok: int = 0
         # Per-pack parse counters: distinguen LIVE vs FROZEN vs NO-RESPONSE.
         self._parses_by_pack: dict[int, int] = {p: 0 for p in range(1, 5)}
+        # Per-pack PIA-only parse counters. A diferencia de `_parses_by_pack`
+        # (que suma PIA+PIB), éste incrementa SOLO en un poll PIA exitoso — el
+        # que trae V/I/SoC. Es el heartbeat de frescura del SoC: si sube, el
+        # SoC del pack es reciente. HA lo usa para gatear `sensor.gadi_battery_soc`
+        # (evita el falso caso de un pack que contesta PIB pero no PIA y dejaría
+        # el SoC congelado mientras `_parses` seguía subiendo por PIB).
+        self._pia_parses_by_pack: dict[int, int] = {p: 0 for p in range(1, 5)}
 
     # ───── Lifecycle ──────────────────────────────────────────────
 
@@ -304,6 +311,7 @@ class BmsService:
                         log.info("pack %d volvió a responder — re-incluido en agregados", pack)
                     self._parses_ok += 1
                     self._parses_by_pack[pack] = self._parses_by_pack.get(pack, 0) + 1
+                    self._pia_parses_by_pack[pack] = self._pia_parses_by_pack.get(pack, 0) + 1
                     cycle_ok += 1
                     log.debug(
                         "PIA pack=%d V=%.2f I=%+.2f SoC=%.1f",
@@ -370,6 +378,8 @@ class BmsService:
             self._pub("bluesun_octopus_parses_ok", self._parses_ok)
             for pack_num, parses in self._parses_by_pack.items():
                 self._pub(f"bluesun_pack{pack_num:02d}_parses", parses)
+            for pack_num, pia_parses in self._pia_parses_by_pack.items():
+                self._pub(f"bluesun_pack{pack_num:02d}_soc_polls", pia_parses)
 
             # Wait hasta cumplir el fast interval (slow polls a costa del wall-clock)
             elapsed = time.monotonic() - cycle_start
@@ -450,6 +460,7 @@ class BmsService:
         self._pub("bluesun_bank_voltage_avg", agg.voltage_avg_V)
         self._pub("bluesun_bank_current_total", agg.current_total_A)
         self._pub("bluesun_bank_soc_avg", agg.soc_avg_pct)
+        self._pub("bluesun_bank_soc_min", agg.soc_min_pct)
         self._pub("bluesun_bank_soc_spread", agg.soc_spread_pct)
         self._pub("bluesun_bank_power", agg.power_W)
         self._pub("bluesun_bank_power_charging", agg.power_charging_W)

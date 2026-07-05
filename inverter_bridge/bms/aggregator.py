@@ -22,6 +22,7 @@ class BankAggregates:
     voltage_avg_V: float | None
     current_total_A: float | None
     soc_avg_pct: float | None
+    soc_min_pct: float | None          # min de packs frescos (señal honesta p/ autonomía)
     soc_spread_pct: float | None
     power_W: float | None              # voltage_avg * current_total
     remaining_Ah: float | None         # sum
@@ -90,6 +91,7 @@ def aggregate_bank(
     voltage_avg = _avg_or_none(voltages)
     current_total = _sum_or_none(currents)
     soc_avg = _avg_or_none(socs)
+    soc_min = _min_or_none(socs)
     soc_spread = (max(socs) - min(socs)) if socs else None
     remaining = _sum_or_none(remainings)
     nominal = _sum_or_none(nominals)
@@ -140,6 +142,7 @@ def aggregate_bank(
         voltage_avg_V=voltage_avg,
         current_total_A=current_total,
         soc_avg_pct=soc_avg,
+        soc_min_pct=soc_min,
         soc_spread_pct=soc_spread,
         power_W=power,
         remaining_Ah=remaining,

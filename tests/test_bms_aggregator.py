@@ -86,6 +86,9 @@ def test_full_bank_balanced_discharging():
     # SoC avg
     assert agg.soc_avg_pct == pytest.approx((64.3 + 64.6 + 64.1 + 64.7) / 4)
     assert agg.soc_spread_pct == pytest.approx(64.7 - 64.1)
+    # SoC min — el pack más bajo manda para autonomía/energía (no el promedio,
+    # que se infla con packs apagados/desbalanceados).
+    assert agg.soc_min_pct == pytest.approx(64.1)
     # Remaining / nominal sumados
     assert agg.remaining_Ah == pytest.approx(180.0 + 181.0 + 176.0 + 182.0)
     assert agg.nominal_Ah == pytest.approx(280.0 + 280.0 + 274.4 + 280.0)
@@ -123,6 +126,7 @@ def test_empty_bank():
     assert agg.voltage_avg_V is None
     assert agg.current_total_A is None
     assert agg.soc_avg_pct is None
+    assert agg.soc_min_pct is None
     assert agg.soc_spread_pct is None
     assert agg.power_W is None
     assert agg.remaining_Ah is None
