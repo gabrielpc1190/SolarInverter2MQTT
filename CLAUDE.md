@@ -7,6 +7,8 @@ status: active
 stack: [python, mqtt]
 deploy: "GADI Orange Pi (alias SSH GADI-InverterBridge)"
 repo: "git@github.com:gabrielpc1190/SolarInverter2MQTT.git"
+tags: [gadi, energia]
+related: [HomeAssistant, bluesun-bms-esp32s3-panel]
 ---
 
 # CLAUDE.md — inverter-bridge
