@@ -1,3 +1,14 @@
+---
+type: project
+title: inverter-bridge
+description: "Daemon Python que puentea el inversor solar ↔ MQTT (reemplaza Solar Assistant en GADI)."
+production: true
+status: active
+stack: [python, mqtt]
+deploy: "GADI Orange Pi (alias SSH GADI-InverterBridge)"
+repo: "git@github.com:gabrielpc1190/SolarInverter2MQTT.git"
+---
+
 # CLAUDE.md — inverter-bridge
 
 Daemon Python que reemplaza Solar Assistant en el sitio GADI. Despliegue en producción → leer `README.md` para overview y `docs/DEPLOYMENT.md` antes de tocar el host.
